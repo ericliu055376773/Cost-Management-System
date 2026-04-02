@@ -106,7 +106,7 @@ export default function App() {
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   
-  const [isShaking, setIsShaking] = useState(false); // 控制密碼錯誤震動
+  const [isShaking, setIsShaking] = useState(false); 
   
   const [currentTab, setCurrentTab] = useState('ingredients'); 
   const [isSyncing, setIsSyncing] = useState(false);
@@ -130,12 +130,10 @@ export default function App() {
   const [editingGlobalSettings, setEditingGlobalSettings] = useState(defaultGlobalSettings);
   const [setMenus, setSetMenus] = useState(initialSetMenus);
 
-  // 文字自訂介面狀態
   const [isEditingUI, setIsEditingUI] = useState(false);
   const [tempUITexts, setTempUITexts] = useState(defaultUITexts);
   const [tempSystemName, setTempSystemName] = useState(defaultGlobalSettings.systemName);
 
-  // 取得當前有效的介面文字
   const texts = globalSettings.uiTexts || defaultUITexts;
 
   // ==========================================
@@ -215,18 +213,16 @@ export default function App() {
       setError('Invalid password');
       setPin('');
       setIsShaking(true);
-      setTimeout(() => setIsShaking(false), 500); // 500ms 後停止震動動畫
+      setTimeout(() => setIsShaking(false), 500); 
     }
   };
 
-  // 監聽密碼滿 4 碼自動驗證
   useEffect(() => {
     if (pin.length === 4) {
-      setTimeout(() => handleLogin(), 150); // 給一點時間讓動畫跑完再驗證
+      setTimeout(() => handleLogin(), 150); 
     }
   }, [pin]);
 
-  // 初始化與登入狀態設定
   useEffect(() => {
     const initAuthAndListen = async () => {
       try {
@@ -253,21 +249,26 @@ export default function App() {
     }
   }, [currentTab, productRules, globalSettings]);
 
-  // 同步函式 (增加 isAuto 參數，隱藏自動同步時的通知)
+  // ==========================================
+  // ⚡ 強化版同步函式 (完全透明進度與錯誤)
+  // ==========================================
   const handleSync = async (isAuto = false) => {
     setIsSyncing(true);
-    if (!isAuto) setSyncMessage(null); 
+    setSyncMessage(null); 
     try {
       const ordersRef = collection(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_orders');
       const querySnapshot = await getDocs(ordersRef);
       const ordersList = querySnapshot.docs.map(doc => doc.data()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
       const finalProductsMap = new Map();
       
+      let totalItemsImported = 0;
+
       ordersList.forEach(order => {
          const vendorName = order.id.split('-')[1] || '未分類廠商';
          if (Array.isArray(order.items)) {
            order.items.forEach(item => {
               if (item.name) {
+                totalItemsImported++;
                 const cat = inferCategory(item.name);
                 const key = `${vendorName}-${item.name}`; 
                 finalProductsMap.set(key, {
@@ -280,25 +281,30 @@ export default function App() {
       });
 
       const newRawData = Array.from(finalProductsMap.values());
+      
+      // 關鍵修改：不論有沒有抓到資料，都強制蓋掉預設的假資料 (雞腿肉那些)
+      // 這樣如果連線成功但抓到 0 筆資料，畫面也會變空，不會讓使用者誤以為沒同步
+      setRawErpData(newRawData); 
+
       if (newRawData.length > 0) {
-        setRawErpData(newRawData); 
-        if (!isAuto) setSyncMessage({ type: 'success', text: `同步成功！已取得最新進貨單價。` });
+        setSyncMessage({ type: 'success', text: `✅ 同步成功！讀取 ${ordersList.length} 張單據，匯入 ${newRawData.length} 項食材。` });
       } else {
-        if (!isAuto) setSyncMessage({ type: 'error', text: '目前資料庫中沒有進貨單。' });
+        setSyncMessage({ type: 'error', text: `⚠️ 連線成功，但資料庫內目前沒有任何食材名稱。(找到 ${ordersList.length} 張空單據)` });
       }
     } catch (err) {
       console.error('Firebase 同步錯誤:', err);
-      if (!isAuto) setSyncMessage({ type: 'error', text: `同步錯誤: ${err.message}` });
+      // 如果被權限擋住，會在這裡清楚顯示
+      setSyncMessage({ type: 'error', text: `❌ 同步被拒絕: ${err.message} (請確認 Firebase 白名單設定)` });
     } finally {
       setIsSyncing(false);
-      if (!isAuto) setTimeout(() => setSyncMessage(null), 3000);
+      // 把訊息停留時間拉長到 8 秒，讓使用者能看清楚
+      setTimeout(() => setSyncMessage(null), 8000);
     }
   };
 
-  // 全自動：登入成功後，立刻在背景無縫同步最新資料
   useEffect(() => {
     if (isAuthenticated) {
-      handleSync(true);
+      handleSync(true); // 登入後自動執行背景同步
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
@@ -357,7 +363,6 @@ export default function App() {
   const renderUIEditor = () => {
     if (!isEditingUI) return null;
     
-    // 將原本的 Component 寫法改為普通的回傳函式，避免 React 重新渲染時失去焦點
     const renderInputField = (label, valueKey) => (
       <div key={valueKey}>
         <label className="block text-xs font-bold text-[#7F7F7F] mb-2 tracking-widest uppercase">{label}</label>
@@ -424,14 +429,9 @@ export default function App() {
     );
   };
 
-  // ==========================================
-  // UI：登入畫面 (明亮白底風格)
-  // ==========================================
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-white flex flex-col items-center justify-center p-6 font-sans selection:bg-neutral-200 relative overflow-hidden">
-        
-        {/* 定義 CSS 動畫 (密碼錯誤震動) */}
         <style>
           {`
             @keyframes shake {
@@ -444,20 +444,13 @@ export default function App() {
             }
           `}
         </style>
-
-        {/* 簡約科技感登入區塊 (白底版) */}
         <div className={`w-full max-w-[320px] flex flex-col items-center z-10 ${isShaking ? 'animate-shake' : ''}`}>
-          
           <div className="w-16 h-16 bg-[#F5F5F5] rounded-[20px] flex items-center justify-center mb-8 border border-neutral-100 shadow-sm">
             <Lock className="w-8 h-8 text-black" strokeWidth={1.5} />
           </div>
-          
           <h1 className="text-3xl font-semibold text-black tracking-wide mb-12">{texts.loginTitle}</h1>
-          
           <div className="w-full">
             <form onSubmit={handleLogin} className="flex flex-col items-center">
-              
-              {/* 極簡密碼點點 (深色點點) */}
               <div className="flex items-center justify-center gap-6 mb-8 relative w-full h-[30px]">
                 {[0, 1, 2, 3].map((index) => {
                   const isFilled = pin.length > index;
@@ -482,23 +475,17 @@ export default function App() {
                   autoFocus
                 />
               </div>
-
-              {/* 錯誤提示文字 (紅色) */}
               <div className="h-6 mb-8 flex items-center justify-center w-full">
                 {(pin.length < 4 || error) && (
                    <p className="text-[#E04D41] text-xs font-bold tracking-wide">{error || texts.loginErrorNotLongEnough}</p>
                 )}
               </div>
-
-              {/* 提交按鈕 (黑底白字) */}
               <button
                 type="submit" disabled={pin.length !== 4}
                 className="w-full bg-black text-white hover:bg-neutral-800 disabled:bg-[#F5F5F5] disabled:text-neutral-400 disabled:cursor-not-allowed font-bold py-4 rounded-[20px] transition-all text-sm tracking-wide shadow-[0_10px_20px_rgba(0,0,0,0.08)] disabled:shadow-none"
               >
                 {texts.loginButton}
               </button>
-
-              {/* 取消按鈕 */}
               <button
                type="button"
                onClick={() => setPin('')}
@@ -513,9 +500,6 @@ export default function App() {
     );
   }
 
-  // ==========================================
-  // 畫面：參數設定介面 (Settings)
-  // ==========================================
   const renderSettingsTab = () => {
     return (
       <div className="animate-in fade-in duration-500 pb-24 md:pb-8">
@@ -532,7 +516,6 @@ export default function App() {
           </button>
         </div>
 
-        {/* 全域參數區塊 */}
         <div className="bg-white p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 mb-8">
            <h3 className="font-black text-lg text-black mb-6 flex items-center gap-3">
              <div className="p-2 bg-[#F5F5F5] rounded-full"><Receipt size={20} className="text-black"/></div>
@@ -565,7 +548,6 @@ export default function App() {
            </div>
         </div>
 
-        {/* 搜尋與分類過濾區塊 */}
         <div className="bg-white p-6 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 mb-8 flex flex-col gap-5">
            <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
@@ -673,9 +655,6 @@ export default function App() {
     );
   };
 
-  // ==========================================
-  // 畫面：商品成本計算器 (Set Menus)
-  // ==========================================
   const renderSetMenuTab = () => {
     if (editingMenu) {
       let totalIngredientsCost = 0;
@@ -720,7 +699,6 @@ export default function App() {
           </button>
           
           <div className="bg-white rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 overflow-hidden mb-8 flex flex-col">
-            {/* 頂部：極端對比的黑色卡片 Header */}
             <div className="bg-black p-8 flex flex-col md:flex-row md:items-center justify-between gap-6">
               <div className="flex-1 w-full">
                  <span className="text-[#7F7F7F] text-xs font-bold uppercase tracking-widest mb-2 block">商品名稱</span>
@@ -742,7 +720,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* 中間：分類樹狀結構編輯區 */}
             <div className="p-6 md:p-8 bg-white flex-1">
               <div className="flex justify-between items-end mb-8">
                 <div>
@@ -846,7 +823,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* 計算結果面板 */}
             <div className="bg-[#F5F5F5] p-6 md:p-8 flex flex-col xl:flex-row justify-between items-center gap-6 rounded-b-[32px]">
               <div className="flex gap-6 sm:gap-10 w-full xl:w-auto flex-wrap">
                 <div>
@@ -877,7 +853,6 @@ export default function App() {
       );
     }
 
-    // 商品列表畫面
     return (
       <div className="animate-in fade-in duration-500 pb-24 md:pb-8">
         <div className="flex justify-between items-end mb-8">
@@ -946,9 +921,6 @@ export default function App() {
     );
   };
 
-  // ==========================================
-  // 畫面：食材分類與成本
-  // ==========================================
   const renderIngredientsTab = () => {
     if (searchQuery.trim() !== '') {
       return (
@@ -1043,20 +1015,26 @@ export default function App() {
           <p className="text-[#7F7F7F] font-medium text-sm mt-2 tracking-wide">請選擇食材分類以檢視廠商報價。</p>
         </div>
         
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
-          {erpData.map(category => (
-            <button
-              key={category.id} onClick={() => setSelectedCategory(category)}
-              className={`bg-white border border-neutral-100 p-6 sm:p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] hover:shadow-[0_20px_40px_rgba(0,0,0,0.06)] transition-all flex flex-col items-center justify-center text-center group`}
-            >
-              <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300 bg-[#F5F5F5]`}>
-                {getIconByCategory(category.category)}
-              </div>
-              <h3 className="font-black text-black text-lg tracking-tight">{category.category}</h3>
-              <p className="text-[10px] text-[#7F7F7F] font-bold mt-3 bg-white px-3 py-1 rounded-full uppercase tracking-widest border border-neutral-100 shadow-sm">{category.vendors.length} 家廠商</p>
-            </button>
-          ))}
-        </div>
+        {erpData.length === 0 ? (
+          <div className="col-span-full text-center py-20 text-[#7F7F7F] font-bold border-2 border-dashed border-neutral-200 rounded-[2rem] bg-white">
+            目前沒有從進貨系統讀取到任何食材。<br/>請確認進貨系統是否有建立單據。
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
+            {erpData.map(category => (
+              <button
+                key={category.id} onClick={() => setSelectedCategory(category)}
+                className={`bg-white border border-neutral-100 p-6 sm:p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] hover:shadow-[0_20px_40px_rgba(0,0,0,0.06)] transition-all flex flex-col items-center justify-center text-center group`}
+              >
+                <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300 bg-[#F5F5F5]`}>
+                  {getIconByCategory(category.category)}
+                </div>
+                <h3 className="font-black text-black text-lg tracking-tight">{category.category}</h3>
+                <p className="text-[10px] text-[#7F7F7F] font-bold mt-3 bg-white px-3 py-1 rounded-full uppercase tracking-widest border border-neutral-100 shadow-sm">{category.vendors.length} 家廠商</p>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     );
   };
@@ -1069,12 +1047,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#F5F5F5] text-black flex font-sans selection:bg-neutral-200">
-      
-      {/* ==========================================
-          【電腦版】左側側邊欄 (Sidebar)
-          ========================================== */}
       <aside className="hidden md:flex flex-col w-[280px] bg-white fixed h-full z-40 border-r border-neutral-100 shadow-[10px_0_30px_rgba(0,0,0,0.02)]">
-        {/* 電腦版左上角 LOGO (可點擊修改文字) */}
         <button onClick={openUIEditor} className="p-8 flex items-center gap-4 hover:bg-neutral-50 transition-colors w-full text-left group">
           <div className="w-10 h-10 bg-black rounded-[14px] flex items-center justify-center shadow-md group-hover:scale-105 transition-transform shrink-0"><Calculator className="w-5 h-5 text-white" strokeWidth={2} /></div>
           <div className="flex flex-col">
@@ -1112,18 +1085,11 @@ export default function App() {
         </div>
       </aside>
 
-      {/* ==========================================
-          【主要內容區】(右側區域 / 手機滿版)
-          ========================================== */}
       <div className="flex-1 md:ml-[280px] flex flex-col min-h-screen">
-        
-        {/* 頂部 Header */}
         <header className="bg-[#F5F5F5]/80 backdrop-blur-xl sticky top-0 z-30 px-4 py-4 md:px-10 md:py-8">
           <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
             
-            {/* 手機版標題列 (電腦版隱藏) */}
             <div className="flex md:hidden justify-between items-center w-full bg-white p-4 rounded-[24px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100">
-              {/* 手機版左上角 LOGO (可點擊修改文字) */}
               <button onClick={openUIEditor} className="flex items-center gap-3 w-fit text-left active:scale-95 transition-transform group">
                 <div className="w-8 h-8 bg-black rounded-[10px] flex items-center justify-center shrink-0"><Calculator className="w-4 h-4 text-white" /></div>
                 <div className="flex flex-col">
@@ -1131,12 +1097,11 @@ export default function App() {
                   <span className="text-[8px] text-neutral-400 font-bold block -mt-0.5 leading-none uppercase">介面文字設定</span>
                 </div>
               </button>
-              <button onClick={handleSync} disabled={isSyncing} className={`w-10 h-10 flex items-center justify-center rounded-full bg-[#F5F5F5] text-black ${isSyncing ? 'animate-spin' : ''}`}>
+              <button onClick={() => handleSync(false)} disabled={isSyncing} className={`w-10 h-10 flex items-center justify-center rounded-full bg-[#F5F5F5] text-black ${isSyncing ? 'animate-spin' : ''}`}>
                 <RefreshCw size={16} />
               </button>
             </div>
 
-            {/* 搜尋列與同步按鈕 (電腦版配置) */}
             <div className="flex-1 flex items-center gap-4 w-full justify-between sm:justify-end">
               {currentTab !== 'settings' && (
                 <div className="relative w-full sm:max-w-md">
@@ -1152,7 +1117,7 @@ export default function App() {
               )}
               
               <button 
-                onClick={handleSync} disabled={isSyncing}
+                onClick={() => handleSync(false)} disabled={isSyncing}
                 className={`hidden md:flex items-center gap-3 px-6 py-3.5 rounded-full font-bold transition-all bg-white hover:bg-neutral-50 text-black shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100
                   ${isSyncing ? 'opacity-50 cursor-wait' : 'active:scale-95'}`}
               >
@@ -1164,7 +1129,7 @@ export default function App() {
           
           {syncMessage && (
             <div className={`mt-4 p-4 rounded-[20px] flex items-center text-sm font-bold max-w-6xl mx-auto shadow-sm
-              ${syncMessage.type === 'success' ? 'bg-white text-black border border-neutral-200' : 'bg-black text-white'}`}
+              ${syncMessage.type === 'success' ? 'bg-white text-black border border-neutral-200' : 'bg-[#FEF2F2] border-[#FECACA] border text-[#EF4444]'}`}
             >
               {syncMessage.type === 'success' ? <CheckCircle className="w-5 h-5 mr-3" /> : <AlertCircle className="w-5 h-5 mr-3" />}
               {syncMessage.text}
@@ -1172,7 +1137,6 @@ export default function App() {
           )}
         </header>
 
-        {/* 主畫面切換區 */}
         <main className="flex-1 p-4 md:px-10 md:pb-10 max-w-6xl mx-auto w-full">
           {currentTab === 'ingredients' && renderIngredientsTab()}
           {currentTab === 'setMenus' && renderSetMenuTab()}
@@ -1180,9 +1144,6 @@ export default function App() {
         </main>
       </div>
 
-      {/* ==========================================
-          【手機版】底部固定導覽列 (Bottom Nav)
-          ========================================== */}
       <nav className="md:hidden fixed bottom-6 left-4 right-4 bg-black/95 backdrop-blur-xl rounded-[32px] z-50 shadow-[0_20px_40px_rgba(0,0,0,0.15)]">
         <div className="flex justify-around items-center p-2">
           {navItems.map(item => (
@@ -1204,9 +1165,6 @@ export default function App() {
   );
 }
 
-// ==========================================
-// 獨立元件：食材卡片 (極簡版)
-// ==========================================
 function IngredientCard({ item, categoryName, vendorName }) {
   return (
     <div className="bg-white rounded-[32px] border border-neutral-100 shadow-[0_10px_30px_rgba(0,0,0,0.03)] hover:shadow-[0_20px_40px_rgba(0,0,0,0.06)] hover:border-black transition-all overflow-hidden flex flex-col group">
