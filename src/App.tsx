@@ -24,10 +24,10 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const erpAppId = 'hotpot-erp-system'; 
 
-// 預設分類判斷邏輯
+// 預設分類判斷邏輯 (新增蛤仔判斷)
 const inferCategory = (itemName) => {
   if (/牛|豬|雞|羊|肉|鴨|鵝/.test(itemName)) return '肉類';
-  if (/蝦|魚|蟹|干貝|透抽|蛤蜊|蚵|海鮮|花枝|魷/.test(itemName)) return '海鮮類';
+  if (/蝦|魚|蟹|干貝|透抽|蛤|蚵|海鮮|花枝|魷/.test(itemName)) return '海鮮類';
   if (/菜|蔥|蒜|菇|瓜|蘿蔔|洋蔥|番茄|筍|芋|蓮/.test(itemName)) return '蔬菜類';
   if (/餃|丸|豆腐|豆皮|血|漿|麵|冬粉|飯/.test(itemName)) return '火鍋料與副餐';
   return '飲品與其他';
@@ -226,6 +226,7 @@ export default function App() {
     }
   }, [pin]);
 
+  // 初始化與登入狀態設定
   useEffect(() => {
     const initAuthAndListen = async () => {
       try {
@@ -252,9 +253,10 @@ export default function App() {
     }
   }, [currentTab, productRules, globalSettings]);
 
-  const handleSync = async () => {
+  // 同步函式 (增加 isAuto 參數，隱藏自動同步時的通知)
+  const handleSync = async (isAuto = false) => {
     setIsSyncing(true);
-    setSyncMessage(null); 
+    if (!isAuto) setSyncMessage(null); 
     try {
       const ordersRef = collection(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_orders');
       const querySnapshot = await getDocs(ordersRef);
@@ -280,18 +282,26 @@ export default function App() {
       const newRawData = Array.from(finalProductsMap.values());
       if (newRawData.length > 0) {
         setRawErpData(newRawData); 
-        setSyncMessage({ type: 'success', text: `同步成功！已取得最新進貨單價。` });
+        if (!isAuto) setSyncMessage({ type: 'success', text: `同步成功！已取得最新進貨單價。` });
       } else {
-        setSyncMessage({ type: 'error', text: '目前資料庫中沒有進貨單。' });
+        if (!isAuto) setSyncMessage({ type: 'error', text: '目前資料庫中沒有進貨單。' });
       }
     } catch (err) {
       console.error('Firebase 同步錯誤:', err);
-      setSyncMessage({ type: 'error', text: `同步錯誤: ${err.message}` });
+      if (!isAuto) setSyncMessage({ type: 'error', text: `同步錯誤: ${err.message}` });
     } finally {
       setIsSyncing(false);
-      setTimeout(() => setSyncMessage(null), 3000);
+      if (!isAuto) setTimeout(() => setSyncMessage(null), 3000);
     }
   };
+
+  // 全自動：登入成功後，立刻在背景無縫同步最新資料
+  useEffect(() => {
+    if (isAuthenticated) {
+      handleSync(true);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
 
   const saveSettingsToCloud = async () => {
     setIsSyncing(true);
