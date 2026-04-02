@@ -6,10 +6,11 @@ import { Search, Lock, ChevronLeft, Package, RefreshCw, Calculator, DollarSign, 
 // Firebase 雲端資料庫設定
 // ==========================================
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth, signInAnonymously } from 'firebase/auth';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, getDocs, doc, setDoc, onSnapshot } from 'firebase/firestore';
 
-const firebaseConfig = {
+// 兼容 Canvas 環境與原廠設定
+const fallbackConfig = {
   apiKey: "AIzaSyAc0LGsLeEBcJ3fOj08NwAWbZL0d3GKHrA",
   authDomain: "ypxerp.firebaseapp.com",
   projectId: "ypxerp",
@@ -19,10 +20,11 @@ const firebaseConfig = {
   measurementId: "G-MFJ8WW5707"
 };
 
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : fallbackConfig;
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const erpAppId = 'hotpot-erp-system'; 
+const erpAppId = typeof __app_id !== 'undefined' ? __app_id : 'hotpot-erp-system';
 
 // 預設分類判斷邏輯 (新增蛤仔判斷)
 const inferCategory = (itemName) => {
@@ -102,6 +104,7 @@ const initialSetMenus = [
 ];
 
 export default function App() {
+  const [firebaseUser, setFirebaseUser] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
@@ -223,24 +226,42 @@ export default function App() {
     }
   }, [pin]);
 
+  // Firebase Auth Initialization
   useEffect(() => {
-    const initAuthAndListen = async () => {
+    const initAuth = async () => {
       try {
-        await signInAnonymously(auth);
-        const rulesRef = doc(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_cost_rules', 'rules');
-        onSnapshot(rulesRef, (docSnap) => {
-          if (docSnap.exists()) {
-             const data = docSnap.data();
-             if (data.rules) setProductRules(prev => ({ ...prev, ...data.rules }));
-             if (data.globalSettings) setGlobalSettings(prev => ({ ...prev, ...data.globalSettings }));
-          }
-        });
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
       } catch (err) {
          console.error('Firebase Auth Error:', err);
       }
     };
-    initAuthAndListen();
+    initAuth();
+    
+    const unsubscribe = onAuthStateChanged(auth, setFirebaseUser);
+    return () => unsubscribe();
   }, []);
+
+  // Firebase Data Fetching
+  useEffect(() => {
+    if (!firebaseUser) return;
+    
+    const rulesRef = doc(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_cost_rules', 'rules');
+    const unsubscribe = onSnapshot(rulesRef, (docSnap) => {
+      if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.rules) setProductRules(prev => ({ ...prev, ...data.rules }));
+          if (data.globalSettings) setGlobalSettings(prev => ({ ...prev, ...data.globalSettings }));
+      }
+    }, (error) => {
+      console.error("Error listening to rules:", error);
+    });
+
+    return () => unsubscribe();
+  }, [firebaseUser]);
 
   useEffect(() => {
     if (currentTab === 'settings') {
@@ -253,6 +274,8 @@ export default function App() {
   // ⚡ 強化版同步函式 (完全透明進度與錯誤)
   // ==========================================
   const handleSync = async (isAuto = false) => {
+    if (!firebaseUser) return;
+    
     setIsSyncing(true);
     setSyncMessage(null); 
     try {
@@ -269,7 +292,8 @@ export default function App() {
            order.items.forEach(item => {
               if (item.name) {
                 totalItemsImported++;
-                const cat = inferCategory(item.name);
+                // 【修改這裡】優先使用點貨系統傳過來的分類 (item.category)，若無則 fallback 到原本的字串判斷
+                const cat = item.category || inferCategory(item.name);
                 const key = `${vendorName}-${item.name}`; 
                 finalProductsMap.set(key, {
                    category: cat, vendor: vendorName, name: item.name,
@@ -307,9 +331,10 @@ export default function App() {
       handleSync(true); // 登入後自動執行背景同步
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated]);
+  }, [isAuthenticated, firebaseUser]);
 
   const saveSettingsToCloud = async () => {
+    if (!firebaseUser) return;
     setIsSyncing(true);
     try {
        const rulesRef = doc(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_cost_rules', 'rules');
@@ -332,6 +357,7 @@ export default function App() {
   };
 
   const saveUITexts = async () => {
+    if (!firebaseUser) return;
     const newSettings = { ...globalSettings, uiTexts: tempUITexts, systemName: tempSystemName };
     try {
        const rulesRef = doc(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_cost_rules', 'rules');
