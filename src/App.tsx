@@ -75,6 +75,7 @@ const defaultUITexts = {
   tabIngredients: '食材成本',
   tabSetMenus: '商品計算',
   tabSettings: '系統參數',
+  tabSellingPrice: '售價金額',
   statusTitle: '系統狀態',
   statusText: '雲端已連線'
 };
@@ -133,6 +134,7 @@ export default function App() {
   const [editingGlobalSettings, setEditingGlobalSettings] = useState(defaultGlobalSettings);
   const [setMenus, setSetMenus] = useState(initialSetMenus);
 
+  const [foodCostPercent, setFoodCostPercent] = useState(33.33);
   const [isEditingUI, setIsEditingUI] = useState(false);
   const [tempUITexts, setTempUITexts] = useState(defaultUITexts);
   const [tempSystemName, setTempSystemName] = useState(defaultGlobalSettings.systemName);
@@ -445,7 +447,8 @@ export default function App() {
                {renderInputField("側邊欄群組標題", "sidebarMenu")}
                {renderInputField("分頁 1 名稱", "tabIngredients")}
                {renderInputField("分頁 2 名稱", "tabSetMenus")}
-               {renderInputField("分頁 3 名稱", "tabSettings")}
+               {renderInputField("分頁 3 名稱", "tabSellingPrice")}
+               {renderInputField("分頁 4 名稱", "tabSettings")}
                {renderInputField("狀態欄標題", "statusTitle")}
                {renderInputField("狀態欄提示字", "statusText")}
              </div>
@@ -947,6 +950,176 @@ export default function App() {
     );
   };
 
+  const renderSellingPriceTab = () => {
+    const multiplier = foodCostPercent > 0 ? (100 / foodCostPercent) : 0;
+
+    // 計算每個商品的食材成本與建議售價
+    const menuPricingData = setMenus.map(menu => {
+      let totalIngredientsCost = 0;
+      (menu.categories || []).forEach(cat => {
+        (cat.items || []).forEach(ig => {
+          const latestInfo = allAvailableIngredients.find(a => a.name === ig.itemName && a.vendorName === ig.vendorName) || ig;
+          totalIngredientsCost += (latestInfo.recipeCost || latestInfo.finalCost || 0) * ig.qty;
+        });
+      });
+      const suggestedPrice = foodCostPercent > 0 ? totalIngredientsCost / (foodCostPercent / 100) : 0;
+      const roundedPrice = Math.ceil(suggestedPrice / 5) * 5; // 無條件進位到 5 的倍數
+      return { ...menu, totalIngredientsCost, suggestedPrice, roundedPrice };
+    });
+
+    // 計算每項食材的單位售價
+    const ingredientPricingData = allAvailableIngredients.map(item => {
+      const suggestedPrice = foodCostPercent > 0 ? item.finalCost / (foodCostPercent / 100) : 0;
+      return { ...item, suggestedPrice };
+    });
+
+    return (
+      <div className="animate-in fade-in duration-500 pb-24 md:pb-8">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 mb-8">
+          <div>
+            <h2 className="text-3xl font-black text-black tracking-tight">{texts.tabSellingPrice || '售價金額'}</h2>
+            <p className="text-[#7F7F7F] font-medium text-sm mt-2 tracking-wide">依食材成本百分比，自動推算建議售價。</p>
+          </div>
+        </div>
+
+        {/* 公式與參數設定卡片 */}
+        <div className="bg-white rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 p-6 md:p-8 mb-8">
+          <div className="flex flex-col lg:flex-row lg:items-center gap-6 lg:gap-10">
+            <div className="flex-1">
+              <span className="block text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest mb-3">售價公式</span>
+              <div className="bg-[#F5F5F5] rounded-[20px] p-5 flex flex-wrap items-center gap-3 text-lg font-black text-black tracking-tight">
+                <span>售價</span>
+                <span className="text-[#7F7F7F] font-medium">=</span>
+                <span>食材成本</span>
+                <span className="text-[#7F7F7F] font-medium">÷</span>
+                <div className="inline-flex items-center bg-white rounded-[14px] border border-neutral-200 shadow-sm px-3 py-1.5">
+                  <input
+                    type="number" value={foodCostPercent}
+                    onChange={e => setFoodCostPercent(parseFloat(e.target.value) || 0)}
+                    className="bg-transparent outline-none font-black text-black w-16 text-center text-lg"
+                    step="0.01" min="0" max="100"
+                  />
+                  <span className="text-[#7F7F7F] font-bold text-base">%</span>
+                </div>
+                <span className="text-[#7F7F7F] font-medium">=</span>
+                <span>食材成本</span>
+                <span className="text-[#7F7F7F] font-medium">×</span>
+                <span className="bg-black text-white px-4 py-1.5 rounded-[14px] text-lg">{multiplier.toFixed(2)}</span>
+              </div>
+            </div>
+            <div className="flex flex-col items-center bg-[#F5F5F5] rounded-[24px] p-5 lg:px-8 shrink-0">
+              <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest mb-1">目標食材成本佔比</span>
+              <span className="text-4xl font-black text-black">{foodCostPercent}%</span>
+              <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest mt-1">倍率 ×{multiplier.toFixed(2)}</span>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 mt-5">
+            {[{label: '高利潤 (25%)', val: 25}, {label: '標準 (33.33%)', val: 33.33}, {label: '薄利 (40%)', val: 40}, {label: '極薄利 (50%)', val: 50}].map(preset => (
+              <button key={preset.val} onClick={() => setFoodCostPercent(preset.val)}
+                className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${foodCostPercent === preset.val ? 'bg-black text-white shadow-[0_10px_20px_rgba(0,0,0,0.1)]' : 'bg-[#F5F5F5] text-[#7F7F7F] hover:bg-neutral-200 hover:text-black'}`}>
+                {preset.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 商品建議售價區塊 */}
+        {menuPricingData.length > 0 && (
+          <div className="mb-8">
+            <h3 className="text-xl font-black text-black tracking-tight mb-5 flex items-center gap-3">
+              <div className="w-8 h-8 bg-black rounded-full flex items-center justify-center"><Utensils size={14} className="text-white" /></div>
+              商品建議售價
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {menuPricingData.map(menu => (
+                <div key={menu.id} className="bg-white rounded-[32px] p-8 shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 flex flex-col hover:shadow-[0_20px_40px_rgba(0,0,0,0.06)] transition-all">
+                  <div className="flex justify-between items-start mb-4">
+                    <div className="w-12 h-12 bg-[#F5F5F5] rounded-full flex items-center justify-center"><Tag size={20} className="text-black" strokeWidth={1.5}/></div>
+                  </div>
+                  <h4 className="text-2xl font-black text-black mb-6 tracking-tight">{menu.name}</h4>
+                  
+                  <div className="space-y-4 mt-auto">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">食材成本</span>
+                      <span className="font-black text-black text-lg">${menu.totalIngredientsCost.toFixed(1)}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">目前終端售價</span>
+                      <span className="font-black text-black text-lg">${menu.sellingPrice}</span>
+                    </div>
+                    <div className="flex justify-between items-center bg-black px-5 py-4 rounded-[20px]">
+                      <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">建議售價</span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-black text-white text-2xl">${menu.roundedPrice}</span>
+                        <span className="text-xs text-neutral-500 font-bold">(${menu.suggestedPrice.toFixed(1)})</span>
+                      </div>
+                    </div>
+                    {menu.sellingPrice > 0 && (
+                      <div className="flex justify-between items-center bg-[#F5F5F5] px-5 py-3 rounded-[16px]">
+                        <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">目前食材佔比</span>
+                        <span className={`font-black text-base ${(menu.totalIngredientsCost / menu.sellingPrice * 100) <= foodCostPercent ? 'text-black' : 'text-red-500'}`}>
+                          {(menu.totalIngredientsCost / menu.sellingPrice * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* 單品食材建議售價區塊 */}
+        <div>
+          <h3 className="text-xl font-black text-black tracking-tight mb-5 flex items-center gap-3">
+            <div className="w-8 h-8 bg-black rounded-full flex items-center justify-center"><Scale size={14} className="text-white" /></div>
+            食材單位售價參考
+          </h3>
+          <div className="bg-white rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="border-b border-neutral-100">
+                    <th className="px-6 py-4 text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">食材名稱</th>
+                    <th className="px-6 py-4 text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">分類</th>
+                    <th className="px-6 py-4 text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest text-right">食材成本</th>
+                    <th className="px-6 py-4 text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest text-right">建議售價</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ingredientPricingData.map((item, idx) => (
+                    <tr key={item.id + '-' + idx} className="border-b border-neutral-50 hover:bg-[#F9F9F9] transition-colors">
+                      <td className="px-6 py-4">
+                        <span className="font-black text-black text-sm">{item.name}</span>
+                        <span className="block text-[10px] text-[#7F7F7F] font-bold mt-0.5">{item.vendorName}</span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="text-xs font-bold text-[#7F7F7F] bg-[#F5F5F5] px-3 py-1 rounded-full">{item.categoryName}</span>
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <span className="font-black text-black">${typeof item.finalCost === 'number' ? item.finalCost.toFixed(1) : item.finalCost}</span>
+                        <span className="text-xs text-[#7F7F7F] font-medium ml-1">/{item.unit}</span>
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <span className="font-black text-black text-lg">${item.suggestedPrice.toFixed(1)}</span>
+                        <span className="text-xs text-[#7F7F7F] font-medium ml-1">/{item.unit}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {ingredientPricingData.length === 0 && (
+              <div className="text-center py-16 text-[#7F7F7F] font-medium">
+                尚無食材資料，請先同步資料庫或新增食材。
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderIngredientsTab = () => {
     if (searchQuery.trim() !== '') {
       return (
@@ -1068,6 +1241,7 @@ export default function App() {
   const navItems = [
     { id: 'ingredients', icon: <Layers size={20} strokeWidth={2} />, label: texts.tabIngredients },
     { id: 'setMenus', icon: <Utensils size={20} strokeWidth={2} />, label: texts.tabSetMenus },
+    { id: 'sellingPrice', icon: <Tag size={20} strokeWidth={2} />, label: texts.tabSellingPrice || '售價金額' },
     { id: 'settings', icon: <Settings size={20} strokeWidth={2} />, label: texts.tabSettings },
   ];
 
@@ -1166,6 +1340,7 @@ export default function App() {
         <main className="flex-1 p-4 md:px-10 md:pb-10 max-w-6xl mx-auto w-full">
           {currentTab === 'ingredients' && renderIngredientsTab()}
           {currentTab === 'setMenus' && renderSetMenuTab()}
+          {currentTab === 'sellingPrice' && renderSellingPriceTab()}
           {currentTab === 'settings' && renderSettingsTab()}
         </main>
       </div>
