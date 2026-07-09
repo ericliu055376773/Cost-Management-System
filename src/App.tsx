@@ -50,11 +50,11 @@ const getColorByCategory = () => {
 
 // 初始原始資料
 const initialRawData = [
-  { category: '肉類', vendor: '美福頂級肉品', name: '無骨雞腿肉', rawPrice: 120, unit: 'kg' },
-  { category: '肉類', vendor: '美福頂級肉品', name: '特級牛五花', rawPrice: 350, unit: 'kg' },
-  { category: '蔬菜類', vendor: '產地直送', name: '高山高麗菜', rawPrice: 45, unit: 'kg' },
-  { category: '火鍋料與副餐', vendor: '知名大廠', name: '手工蛋餃', rawPrice: 150, unit: '包' },
-  { category: '海鮮類', vendor: '極鮮海產批發', name: '冷凍白蝦 (40/50)', rawPrice: 280, unit: 'kg' },
+  { category: '肉類', vendor: '美福頂級肉品', name: '無骨雞腿肉', code: 'M001', rawPrice: 120, unit: 'kg' },
+  { category: '肉類', vendor: '美福頂級肉品', name: '特級牛五花', code: 'M002', rawPrice: 350, unit: 'kg' },
+  { category: '蔬菜類', vendor: '產地直送', name: '高山高麗菜', code: 'V001', rawPrice: 45, unit: 'kg' },
+  { category: '火鍋料與副餐', vendor: '知名大廠', name: '手工蛋餃', code: 'H001', rawPrice: 150, unit: '包' },
+  { category: '海鮮類', vendor: '極鮮海產批發', name: '冷凍白蝦 (40/50)', code: 'S001', rawPrice: 280, unit: 'kg' },
 ];
 
 const defaultRules = {
@@ -90,14 +90,14 @@ const initialSetMenus = [
         id: 'cat-1',
         name: '生鮮蔬菜',
         items: [
-          { id: 'ig1', itemId: 'item-產地直送-高山高麗菜', itemName: '高山高麗菜', vendorName: '產地直送', qty: 150, unit: 'g' }
+          { id: 'ig1', itemId: 'item-V001', itemCode: 'V001', itemName: '高山高麗菜', vendorName: '產地直送', qty: 150, unit: 'g' }
         ]
       },
       {
         id: 'cat-2',
         name: '精選火鍋料',
         items: [
-          { id: 'ig2', itemId: 'item-知名大廠-手工蛋餃', itemName: '手工蛋餃', vendorName: '知名大廠', qty: 2, unit: '個' }
+          { id: 'ig2', itemId: 'item-H001', itemCode: 'H001', itemName: '手工蛋餃', vendorName: '知名大廠', qty: 2, unit: '個' }
         ]
       }
     ]
@@ -157,7 +157,8 @@ export default function App() {
        const recipeCost = finalCost / rConv;
        
        grouped[item.category][item.vendor].push({
-          id: `item-${item.vendor}-${item.name}`,
+          id: `item-${item.code || item.vendor + '-' + item.name}`,
+          code: item.code || '',
           name: item.name,
           rawPrice: item.rawPrice,
           unit: item.unit,
@@ -185,6 +186,14 @@ export default function App() {
   const allAvailableIngredients = useMemo(() => {
     return erpData.flatMap(cat => cat.vendors.flatMap(v => v.items.map(item => ({ ...item, categoryName: cat.category, vendorName: v.vendorName }))));
   }, [erpData]);
+
+  // 跨系統比對：代號優先 → 名稱+廠商 → 僅名稱 → 原始資料
+  const findIngredient = (ig) => {
+    return (ig.itemCode && allAvailableIngredients.find(a => a.code && a.code === ig.itemCode))
+      || allAvailableIngredients.find(a => a.name === ig.itemName && a.vendorName === ig.vendorName)
+      || allAvailableIngredients.find(a => a.name === ig.itemName)
+      || ig;
+  };
 
   const uniqueProductsForSettings = useMemo(() => {
     const map = new Map();
@@ -296,9 +305,10 @@ export default function App() {
                 totalItemsImported++;
                 // 【修改這裡】優先使用點貨系統傳過來的分類 (item.category)，若無則 fallback 到原本的字串判斷
                 const cat = item.category || inferCategory(item.name);
-                const key = `${vendorName}-${item.name}`; 
+                const itemCode = item.code || '';
+                const key = itemCode || `${vendorName}-${item.name}`; 
                 finalProductsMap.set(key, {
-                   category: cat, vendor: vendorName, name: item.name,
+                   category: cat, vendor: vendorName, name: item.name, code: itemCode,
                    rawPrice: parseFloat(item.price) || 0, unit: item.unit || '件'
                 });
               }
@@ -384,7 +394,8 @@ export default function App() {
     return allAvailableIngredients.filter(item => 
       item.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
       item.categoryName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.vendorName.toLowerCase().includes(searchQuery.toLowerCase())
+      item.vendorName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (item.code && item.code.toLowerCase().includes(searchQuery.toLowerCase()))
     );
   }, [searchQuery, allAvailableIngredients]);
 
@@ -612,7 +623,10 @@ export default function App() {
               <div key={idx} className="bg-white rounded-[32px] p-8 shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 flex flex-col">
                 <div className="flex justify-between items-start mb-6">
                   <div>
-                    <span className="text-[10px] font-bold text-[#7F7F7F] uppercase tracking-widest block mb-2">{item.category}</span>
+                    <div className="flex items-center gap-2 mb-2">
+                      {item.code && <span className="text-[10px] font-black text-black bg-[#F5F5F5] px-3 py-1 rounded-full uppercase tracking-widest border border-neutral-200">{item.code}</span>}
+                      <span className="text-[10px] font-bold text-[#7F7F7F] uppercase tracking-widest">{item.category}</span>
+                    </div>
                     <h3 className="text-2xl font-black text-black leading-tight tracking-tight">{item.name}</h3>
                   </div>
                   <div className="text-right">
@@ -690,11 +704,11 @@ export default function App() {
       
       const updatedCategories = (editingMenu.categories || []).map(cat => {
         const updatedItems = (cat.items || []).map(ig => {
-           const latestInfo = allAvailableIngredients.find(a => a.name === ig.itemName && a.vendorName === ig.vendorName) || ig;
-           const rCost = latestInfo.recipeCost || latestInfo.finalCost;
+           const latestInfo = findIngredient(ig);
+           const rCost = latestInfo.recipeCost || latestInfo.finalCost || 0;
            const rUnit = latestInfo.recipeUnit || latestInfo.unit;
            totalIngredientsCost += rCost * ig.qty;
-           return { ...ig, recipeCost: rCost, recipeUnit: rUnit, finalCost: latestInfo.finalCost };
+           return { ...ig, recipeCost: rCost, recipeUnit: rUnit, finalCost: latestInfo.finalCost, vendorName: latestInfo.vendorName || ig.vendorName };
         });
         return { ...cat, items: updatedItems };
       });
@@ -709,7 +723,7 @@ export default function App() {
       const handleAddIngredientToCategory = (catId, selectedId) => {
          if (!selectedId) return;
          const ing = allAvailableIngredients.find(i => i.id === selectedId);
-         if (ing) setEditingMenu({...editingMenu, categories: updatedCategories.map(c => c.id === catId ? { ...c, items: [...c.items, { id: `ig-${Date.now()}`, itemId: ing.id, itemName: ing.name, vendorName: ing.vendorName, recipeCost: ing.recipeCost, qty: 1, recipeUnit: ing.recipeUnit }] } : c)});
+         if (ing) setEditingMenu({...editingMenu, categories: updatedCategories.map(c => c.id === catId ? { ...c, items: [...c.items, { id: `ig-${Date.now()}`, itemId: ing.id, itemCode: ing.code || '', itemName: ing.name, vendorName: ing.vendorName, recipeCost: ing.recipeCost, qty: 1, recipeUnit: ing.recipeUnit }] } : c)});
       };
       const handleUpdateIngredientQty = (catId, igId, newQty) => setEditingMenu({...editingMenu, categories: updatedCategories.map(c => c.id === catId ? { ...c, items: c.items.map(i => i.id === igId ? { ...i, qty: newQty } : i) } : c)});
       const handleRemoveIngredient = (catId, igId) => setEditingMenu({...editingMenu, categories: updatedCategories.map(c => c.id === catId ? { ...c, items: c.items.filter(i => i.id !== igId) } : c)});
@@ -790,7 +804,7 @@ export default function App() {
                               >
                                 <option value="" disabled>+ 新增單品...</option>
                                 {allAvailableIngredients.filter(ing => ingredientCategoryFilters[cat.id] ? ing.categoryName === ingredientCategoryFilters[cat.id] : true).map(ing => (
-                                  <option key={ing.id} value={ing.id}>{ing.name}</option>
+                                  <option key={ing.id} value={ing.id}>{ing.code ? `[${ing.code}] ` : ''}{ing.name}</option>
                                 ))}
                               </select>
                            </div>
@@ -808,7 +822,7 @@ export default function App() {
                                  <Tag size={14} className="text-black"/>
                                </div>
                                <div>
-                                 <h4 className="font-black text-black text-base leading-none mb-1.5">{ig.itemName}</h4>
+                                 <h4 className="font-black text-black text-base leading-none mb-1.5">{ig.itemCode && <span className="text-[#7F7F7F] mr-1.5">[{ig.itemCode}]</span>}{ig.itemName}</h4>
                                  <p className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">{ig.vendorName} • ${(ig.recipeCost || 0) < 1 ? (ig.recipeCost || 0).toFixed(4) : (ig.recipeCost || 0).toFixed(2)}/{ig.recipeUnit}</p>
                                </div>
                              </div>
@@ -902,7 +916,7 @@ export default function App() {
             let totalIngredientsCost = 0; let totalItemsCount = 0;
             (menu.categories || []).forEach(cat => {
                (cat.items || []).forEach(ig => {
-                  const latestInfo = allAvailableIngredients.find(a => a.name === ig.itemName && a.vendorName === ig.vendorName) || ig;
+                  const latestInfo = findIngredient(ig);
                   totalIngredientsCost += (latestInfo.recipeCost || latestInfo.finalCost || 0) * ig.qty;
                   totalItemsCount += 1;
                });
@@ -958,7 +972,7 @@ export default function App() {
       let totalIngredientsCost = 0;
       (menu.categories || []).forEach(cat => {
         (cat.items || []).forEach(ig => {
-          const latestInfo = allAvailableIngredients.find(a => a.name === ig.itemName && a.vendorName === ig.vendorName) || ig;
+          const latestInfo = findIngredient(ig);
           totalIngredientsCost += (latestInfo.recipeCost || latestInfo.finalCost || 0) * ig.qty;
         });
       });
@@ -1090,8 +1104,13 @@ export default function App() {
                   {ingredientPricingData.map((item, idx) => (
                     <tr key={item.id + '-' + idx} className="border-b border-neutral-50 hover:bg-[#F9F9F9] transition-colors">
                       <td className="px-6 py-4">
-                        <span className="font-black text-black text-sm">{item.name}</span>
-                        <span className="block text-[10px] text-[#7F7F7F] font-bold mt-0.5">{item.vendorName}</span>
+                        <div className="flex items-center gap-2">
+                          {item.code && <span className="text-[10px] font-black text-black bg-[#F5F5F5] px-2 py-0.5 rounded border border-neutral-200 shrink-0">{item.code}</span>}
+                          <div>
+                            <span className="font-black text-black text-sm">{item.name}</span>
+                            <span className="block text-[10px] text-[#7F7F7F] font-bold mt-0.5">{item.vendorName}</span>
+                          </div>
+                        </div>
                       </td>
                       <td className="px-6 py-4">
                         <span className="text-xs font-bold text-[#7F7F7F] bg-[#F5F5F5] px-3 py-1 rounded-full">{item.categoryName}</span>
@@ -1371,6 +1390,7 @@ function IngredientCard({ item, categoryName, vendorName }) {
     <div className="bg-white rounded-[32px] border border-neutral-100 shadow-[0_10px_30px_rgba(0,0,0,0.03)] hover:shadow-[0_20px_40px_rgba(0,0,0,0.06)] hover:border-black transition-all overflow-hidden flex flex-col group">
       <div className="p-6 md:p-8 border-b border-neutral-100 flex flex-col gap-4">
         <div className="flex gap-2">
+          {item.code && <span className="text-[10px] font-black text-black bg-[#F5F5F5] px-3 py-1.5 rounded-full uppercase tracking-widest border border-neutral-200">{item.code}</span>}
           {categoryName && <span className="text-[10px] font-bold text-[#7F7F7F] bg-[#F5F5F5] px-3 py-1.5 rounded-full uppercase tracking-widest">{categoryName}</span>}
           {vendorName && <span className="text-[10px] font-bold text-black bg-white border border-neutral-200 px-3 py-1.5 rounded-full uppercase tracking-widest shadow-sm">{vendorName}</span>}
         </div>
