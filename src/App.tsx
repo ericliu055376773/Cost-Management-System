@@ -1420,3 +1420,4 @@ function IngredientCard({ item, categoryName, vendorName }) {
     </div>
   );
 }
+
