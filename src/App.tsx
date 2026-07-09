@@ -213,7 +213,7 @@ export default function App() {
   const filteredSettingsProducts = useMemo(() => {
     return uniqueProductsForSettings.filter(item => {
       const matchCat = settingsCategoryFilter === '全部' || item.category === settingsCategoryFilter;
-      const matchSearch = item.name.toLowerCase().includes(settingsSearchQuery.toLowerCase());
+      const matchSearch = item.name.toLowerCase().includes(settingsSearchQuery.toLowerCase()) || (item.code && item.code.toLowerCase().includes(settingsSearchQuery.toLowerCase()));
       return matchCat && matchSearch;
     });
   }, [uniqueProductsForSettings, settingsCategoryFilter, settingsSearchQuery]);
@@ -266,6 +266,13 @@ export default function App() {
           const data = docSnap.data();
           if (data.rules) setProductRules(prev => ({ ...prev, ...data.rules }));
           if (data.globalSettings) setGlobalSettings(prev => ({ ...prev, ...data.globalSettings }));
+          if (data.codeMappings) {
+            // 將雲端儲存的代號對照表套用到現有食材
+            setRawErpData(prev => prev.map(item => {
+              const key = `${item.vendor}-${item.name}`;
+              return data.codeMappings[key] ? { ...item, code: data.codeMappings[key] } : item;
+            }));
+          }
       }
     }, (error) => {
       console.error("Error listening to rules:", error);
@@ -349,8 +356,15 @@ export default function App() {
     if (!firebaseUser) return;
     setIsSyncing(true);
     try {
+       // 建立代號對照表存入雲端
+       const codeMappings = {};
+       rawErpData.forEach(item => {
+         if (item.code) {
+           codeMappings[`${item.vendor}-${item.name}`] = item.code;
+         }
+       });
        const rulesRef = doc(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_cost_rules', 'rules');
-       await setDoc(rulesRef, { rules: editingRules, globalSettings: editingGlobalSettings }, { merge: true });
+       await setDoc(rulesRef, { rules: editingRules, globalSettings: editingGlobalSettings, codeMappings }, { merge: true });
        setSyncMessage({ type: 'success', text: '參數儲存成功！' });
        setCurrentTab('ingredients'); 
     } catch(e) {
@@ -387,6 +401,12 @@ export default function App() {
        const existingRule = prev[productName] || { yieldRate: 100, calculationText: '進貨價 ÷ 100% (無耗損)', recipeUnit: '', recipeConversion: 1 };
        return { ...prev, [productName]: { ...existingRule, [field]: value } };
     });
+  };
+
+  const handleCodeChange = (itemName, vendorName, newCode) => {
+    setRawErpData(prev => prev.map(item => 
+      (item.name === itemName && item.vendor === vendorName) ? { ...item, code: newCode } : item
+    ));
   };
 
   const searchResults = useMemo(() => {
@@ -624,7 +644,11 @@ export default function App() {
                 <div className="flex justify-between items-start mb-6">
                   <div>
                     <div className="flex items-center gap-2 mb-2">
-                      {item.code && <span className="text-[10px] font-black text-black bg-[#F5F5F5] px-3 py-1 rounded-full uppercase tracking-widest border border-neutral-200">{item.code}</span>}
+                      <input
+                        type="text" value={item.code || ''} placeholder="輸入代號..."
+                        onChange={(e) => handleCodeChange(item.name, item.vendor, e.target.value.toUpperCase())}
+                        className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full border outline-none transition-all w-24 text-center ${item.code ? 'text-black bg-[#F5F5F5] border-neutral-200' : 'text-[#ACACAC] bg-white border-dashed border-neutral-300 focus:border-black focus:bg-[#F5F5F5]'}`}
+                      />
                       <span className="text-[10px] font-bold text-[#7F7F7F] uppercase tracking-widest">{item.category}</span>
                     </div>
                     <h3 className="text-2xl font-black text-black leading-tight tracking-tight">{item.name}</h3>
@@ -1420,4 +1444,3 @@ function IngredientCard({ item, categoryName, vendorName }) {
     </div>
   );
 }
-
