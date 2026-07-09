@@ -297,6 +297,15 @@ export default function App() {
     setIsSyncing(true);
     setSyncMessage(null); 
     try {
+      // 先讀取 YPX 商品庫的代號對照表
+      const productsRef = collection(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_products');
+      const productsSnapshot = await getDocs(productsRef);
+      const productCodeMap = {};
+      productsSnapshot.docs.forEach(d => {
+        const p = d.data();
+        if (p.code) { productCodeMap[p.name] = p.code; productCodeMap[p.id || d.id] = p.code; }
+      });
+
       const ordersRef = collection(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_orders');
       const querySnapshot = await getDocs(ordersRef);
       const ordersList = querySnapshot.docs.map(doc => doc.data()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
@@ -310,9 +319,8 @@ export default function App() {
            order.items.forEach(item => {
               if (item.name) {
                 totalItemsImported++;
-                // 【修改這裡】優先使用點貨系統傳過來的分類 (item.category)，若無則 fallback 到原本的字串判斷
                 const cat = item.category || inferCategory(item.name);
-                const itemCode = item.code || '';
+                const itemCode = item.code || productCodeMap[item.name] || productCodeMap[item.id] || '';
                 const key = itemCode || `${vendorName}-${item.name}`; 
                 finalProductsMap.set(key, {
                    category: cat, vendor: vendorName, name: item.name, code: itemCode,
