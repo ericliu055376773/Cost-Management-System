@@ -74,7 +74,7 @@ const defaultUITexts = {
   sidebarMenu: '主選單',
   tabIngredients: '食材成本',
   tabSetMenus: '商品計算',
-  tabSettings: '系統參數',
+  tabSettings: '成本參數',
   tabSellingPrice: '售價金額',
   statusTitle: '系統狀態',
   statusText: '雲端已連線'
@@ -314,12 +314,13 @@ export default function App() {
       let totalItemsImported = 0;
 
       ordersList.forEach(order => {
-         const vendorName = order.id.split('-')[1] || '未分類廠商';
+         const orderVendor = order.id.split('-').slice(1, -1).join('-') || '';
          if (Array.isArray(order.items)) {
            order.items.forEach(item => {
               if (item.name) {
                 totalItemsImported++;
                 const cat = item.category || inferCategory(item.name);
+                const vendorName = orderVendor || item.category || cat || '未分類廠商';
                 const itemCode = item.code || productCodeMap[item.name] || productCodeMap[item.id] || '';
                 const key = itemCode || `${vendorName}-${item.name}`; 
                 finalProductsMap.set(key, {
@@ -655,7 +656,7 @@ export default function App() {
                       <input
                         type="text" value={item.code || ''} placeholder="輸入代號..."
                         onChange={(e) => handleCodeChange(item.name, item.vendor, e.target.value.toUpperCase())}
-                        className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full border outline-none transition-all w-24 text-center ${item.code ? 'text-black bg-[#F5F5F5] border-neutral-200' : 'text-[#ACACAC] bg-white border-dashed border-neutral-300 focus:border-black focus:bg-[#F5F5F5]'}`}
+                        className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full border outline-none transition-all w-24 text-center ${item.code ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-[#ACACAC] bg-white border-dashed border-neutral-300 focus:border-emerald-500 focus:bg-emerald-50'}`}
                       />
                       <span className="text-[10px] font-bold text-[#7F7F7F] uppercase tracking-widest">{item.category}</span>
                     </div>
@@ -667,7 +668,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="space-y-6 flex-1">
+                <div className="space-y-5 flex-1">
                   <div>
                     <label className="block text-xs font-bold text-[#7F7F7F] mb-3 tracking-widest uppercase">淨肉率 / 良率 (%)</label>
                     <input 
@@ -677,23 +678,41 @@ export default function App() {
                     />
                   </div>
                   
-                  <div className="grid grid-cols-2 gap-4">
-                     <div>
-                       <label className="block text-xs font-bold text-[#7F7F7F] mb-3 tracking-widest uppercase">配方計算單位</label>
-                       <input 
-                         type="text" value={rule.recipeUnit || item.unit}
-                         onChange={(e) => handleRuleChange(item.name, 'recipeUnit', e.target.value)}
-                         className="w-full bg-[#F5F5F5] border-transparent rounded-[20px] px-5 py-4 text-black outline-none focus:ring-2 focus:ring-black font-bold"
-                       />
-                     </div>
-                     <div>
-                       <label className="block text-xs font-bold text-[#7F7F7F] mb-3 tracking-widest uppercase truncate" title={`1 ${item.unit} = ? ${rule.recipeUnit || item.unit}`}>單位轉換</label>
-                       <input 
-                         type="number" min="0.01" step="0.01" value={rule.recipeConversion || 1}
-                         onChange={(e) => handleRuleChange(item.name, 'recipeConversion', parseFloat(e.target.value) || 1)}
-                         className="w-full bg-[#F5F5F5] border-transparent rounded-[20px] px-5 py-4 text-black outline-none focus:ring-2 focus:ring-black font-bold"
-                       />
-                     </div>
+                  {/* 規格轉換區塊 */}
+                  <div className="bg-[#F5F5F5] rounded-[24px] p-5">
+                    <label className="block text-xs font-bold text-[#7F7F7F] mb-4 tracking-widest uppercase">規格轉換（配方用量計算）</label>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <span className="bg-white px-4 py-3 rounded-[16px] font-black text-black border border-neutral-200 shrink-0">1 {item.unit}</span>
+                      <span className="text-[#7F7F7F] font-bold">=</span>
+                      <input 
+                        type="number" min="0.01" step="0.01" value={rule.recipeConversion || 1}
+                        onChange={(e) => handleRuleChange(item.name, 'recipeConversion', parseFloat(e.target.value) || 1)}
+                        className="bg-white border border-neutral-200 rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-black w-24 text-center"
+                      />
+                      <select
+                        value={rule.recipeUnit || item.unit}
+                        onChange={(e) => handleRuleChange(item.name, 'recipeUnit', e.target.value)}
+                        className="bg-white border border-neutral-200 rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold"
+                      >
+                        <option value="g">克 (g)</option>
+                        <option value="kg">公斤 (kg)</option>
+                        <option value="台斤">台斤</option>
+                        <option value="斤">斤</option>
+                        <option value="個">個</option>
+                        <option value="片">片</option>
+                        <option value="份">份</option>
+                        <option value="包">包</option>
+                        <option value="盒">盒</option>
+                        <option value="箱">箱</option>
+                        <option value="瓶">瓶</option>
+                        <option value="ml">毫升 (ml)</option>
+                        <option value="L">公升 (L)</option>
+                        <option value="件">件</option>
+                      </select>
+                    </div>
+                    <p className="text-[10px] text-[#7F7F7F] font-bold mt-3">
+                      例如：1箱 = 3000 g，1包 = 600 g，1箱 = 12 個
+                    </p>
                   </div>
 
                   <div>
@@ -706,7 +725,16 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="mt-8 pt-6 border-t border-neutral-100 flex justify-between items-center">
+                {rConv > 1 && (
+                  <div className="mt-6 bg-neutral-50 rounded-[20px] px-5 py-4">
+                    <span className="text-[10px] text-[#7F7F7F] font-bold tracking-widest uppercase">轉換計算</span>
+                    <p className="text-sm font-bold text-black mt-1">
+                      ${item.rawPrice}/{item.unit} ÷ {rule.yieldRate}% = ${previewCost.toFixed(2)}/{item.unit} ÷ {rConv}{rUnit} = <span className="text-emerald-600">${previewRecipeCost < 1 ? previewRecipeCost.toFixed(4) : previewRecipeCost.toFixed(2)}/{rUnit}</span>
+                    </p>
+                  </div>
+                )}
+
+                <div className="mt-6 pt-6 border-t border-neutral-100 flex justify-between items-center">
                   <span className="text-xs font-bold text-[#7F7F7F] tracking-widest uppercase flex items-center gap-2">
                     <div className="p-1.5 bg-neutral-100 rounded-full"><Scale size={14} className="text-black"/></div>
                     配方單位成本
@@ -758,6 +786,18 @@ export default function App() {
          if (ing) setEditingMenu({...editingMenu, categories: updatedCategories.map(c => c.id === catId ? { ...c, items: [...c.items, { id: `ig-${Date.now()}`, itemId: ing.id, itemCode: ing.code || '', itemName: ing.name, vendorName: ing.vendorName, recipeCost: ing.recipeCost, qty: 1, recipeUnit: ing.recipeUnit }] } : c)});
       };
       const handleUpdateIngredientQty = (catId, igId, newQty) => setEditingMenu({...editingMenu, categories: updatedCategories.map(c => c.id === catId ? { ...c, items: c.items.map(i => i.id === igId ? { ...i, qty: newQty } : i) } : c)});
+      const handleUpdateIngredientUnit = (catId, igId, newUnit) => {
+        // 找到對應食材，根據新單位重新計算 recipeCost
+        const ing = allAvailableIngredients.find(a => {
+          const item = updatedCategories.flatMap(c => c.items).find(i => i.id === igId);
+          return item && ((item.itemCode && a.code === item.itemCode) || a.name === item.itemName);
+        });
+        const baseCostPerPurchaseUnit = ing ? (ing.finalCost || ing.rawPrice || 0) : 0;
+        const rule = ing ? (productRules[ing.name] || { recipeConversion: 1, recipeUnit: ing.unit }) : { recipeConversion: 1, recipeUnit: newUnit };
+        // 配方單位成本 = 進貨成本 / 轉換數
+        const recipeCost = rule.recipeConversion > 1 ? baseCostPerPurchaseUnit / rule.recipeConversion : baseCostPerPurchaseUnit;
+        setEditingMenu({...editingMenu, categories: updatedCategories.map(c => c.id === catId ? { ...c, items: c.items.map(i => i.id === igId ? { ...i, recipeUnit: newUnit, recipeCost } : i) } : c)});
+      };
       const handleRemoveIngredient = (catId, igId) => setEditingMenu({...editingMenu, categories: updatedCategories.map(c => c.id === catId ? { ...c, items: c.items.filter(i => i.id !== igId) } : c)});
       const handleSaveMenu = () => {
         const menuToSave = { ...editingMenu, categories: updatedCategories };
@@ -836,7 +876,7 @@ export default function App() {
                               >
                                 <option value="" disabled>+ 新增單品...</option>
                                 {allAvailableIngredients.filter(ing => ingredientCategoryFilters[cat.id] ? ing.categoryName === ingredientCategoryFilters[cat.id] : true).map(ing => (
-                                  <option key={ing.id} value={ing.id}>{ing.code ? `[${ing.code}] ` : ''}{ing.name}</option>
+                                  <option key={ing.id} value={ing.id}>{ing.code ? `[${ing.code}] ` : ''}{ing.name} (${ing.recipeCost < 1 ? ing.recipeCost.toFixed(4) : ing.recipeCost.toFixed(1)}/{ing.recipeUnit})</option>
                                 ))}
                               </select>
                            </div>
@@ -854,18 +894,37 @@ export default function App() {
                                  <Tag size={14} className="text-black"/>
                                </div>
                                <div>
-                                 <h4 className="font-black text-black text-base leading-none mb-1.5">{ig.itemCode && <span className="text-[#7F7F7F] mr-1.5">[{ig.itemCode}]</span>}{ig.itemName}</h4>
+                                 <h4 className="font-black text-black text-base leading-none mb-1.5">{ig.itemCode && <span className="text-emerald-600 mr-1.5">[{ig.itemCode}]</span>}{ig.itemName}</h4>
                                  <p className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">{ig.vendorName} • ${(ig.recipeCost || 0) < 1 ? (ig.recipeCost || 0).toFixed(4) : (ig.recipeCost || 0).toFixed(2)}/{ig.recipeUnit}</p>
                                </div>
                              </div>
                              
-                             <div className="flex items-center gap-6 sm:justify-end">
+                             <div className="flex items-center gap-3 sm:justify-end flex-wrap">
                                <div className="flex items-center bg-[#F5F5F5] rounded-full overflow-hidden focus-within:ring-2 focus-within:ring-black">
                                  <input 
                                    type="number" step="0.01" min="0" value={ig.qty} onChange={e => handleUpdateIngredientQty(cat.id, ig.id, parseFloat(e.target.value) || 0)}
                                    className="w-16 px-3 py-2.5 text-center font-black text-black bg-transparent outline-none text-sm"
                                  />
-                                 <span className="pr-4 text-[#7F7F7F] font-bold text-xs">{ig.recipeUnit}</span>
+                                 <select 
+                                   value={ig.recipeUnit || '件'}
+                                   onChange={e => handleUpdateIngredientUnit(cat.id, ig.id, e.target.value)}
+                                   className="bg-transparent text-[#7F7F7F] font-bold text-xs outline-none pr-3 py-2.5 cursor-pointer"
+                                 >
+                                   <option value="g">g</option>
+                                   <option value="kg">kg</option>
+                                   <option value="台斤">台斤</option>
+                                   <option value="斤">斤</option>
+                                   <option value="個">個</option>
+                                   <option value="片">片</option>
+                                   <option value="份">份</option>
+                                   <option value="包">包</option>
+                                   <option value="盒">盒</option>
+                                   <option value="箱">箱</option>
+                                   <option value="瓶">瓶</option>
+                                   <option value="ml">ml</option>
+                                   <option value="L">L</option>
+                                   <option value="件">件</option>
+                                 </select>
                                </div>
                                
                                <div className="w-20 text-right">
@@ -1081,6 +1140,10 @@ export default function App() {
                 <div key={menu.id} className="bg-white rounded-[32px] p-8 shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 flex flex-col hover:shadow-[0_20px_40px_rgba(0,0,0,0.06)] transition-all">
                   <div className="flex justify-between items-start mb-4">
                     <div className="w-12 h-12 bg-[#F5F5F5] rounded-full flex items-center justify-center"><Tag size={20} className="text-black" strokeWidth={1.5}/></div>
+                    <div className="flex gap-2">
+                      <button onClick={() => { setEditingMenu(menu); setCurrentTab('setMenus'); }} className="p-2 text-neutral-400 hover:text-black hover:bg-[#F5F5F5] rounded-full transition-colors" title="編輯配方"><Edit2 size={16} /></button>
+                      <button onClick={() => setSetMenus(prev => prev.filter(m => m.id !== menu.id))} className="p-2 text-neutral-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors" title="刪除"><Trash2 size={16} /></button>
+                    </div>
                   </div>
                   <h4 className="text-2xl font-black text-black mb-6 tracking-tight">{menu.name}</h4>
                   
@@ -1091,7 +1154,14 @@ export default function App() {
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">目前終端售價</span>
-                      <span className="font-black text-black text-lg">${menu.sellingPrice}</span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-[#7F7F7F] font-bold">$</span>
+                        <input 
+                          type="number" min="0" value={menu.sellingPrice || 0}
+                          onChange={e => setSetMenus(prev => prev.map(m => m.id === menu.id ? { ...m, sellingPrice: parseFloat(e.target.value) || 0 } : m))}
+                          className="font-black text-black text-lg bg-transparent outline-none w-20 text-right focus:bg-[#F5F5F5] rounded-lg px-2 py-1 transition-colors"
+                        />
+                      </div>
                     </div>
                     <div className="flex justify-between items-center bg-black px-5 py-4 rounded-[20px]">
                       <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">建議售價</span>
@@ -1137,7 +1207,7 @@ export default function App() {
                     <tr key={item.id + '-' + idx} className="border-b border-neutral-50 hover:bg-[#F9F9F9] transition-colors">
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
-                          {item.code && <span className="text-[10px] font-black text-black bg-[#F5F5F5] px-2 py-0.5 rounded border border-neutral-200 shrink-0">{item.code}</span>}
+                          {item.code && <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 shrink-0">{item.code}</span>}
                           <div>
                             <span className="font-black text-black text-sm">{item.name}</span>
                             <span className="block text-[10px] text-[#7F7F7F] font-bold mt-0.5">{item.vendorName}</span>
@@ -1422,7 +1492,7 @@ function IngredientCard({ item, categoryName, vendorName }) {
     <div className="bg-white rounded-[32px] border border-neutral-100 shadow-[0_10px_30px_rgba(0,0,0,0.03)] hover:shadow-[0_20px_40px_rgba(0,0,0,0.06)] hover:border-black transition-all overflow-hidden flex flex-col group">
       <div className="p-6 md:p-8 border-b border-neutral-100 flex flex-col gap-4">
         <div className="flex gap-2">
-          {item.code && <span className="text-[10px] font-black text-black bg-[#F5F5F5] px-3 py-1.5 rounded-full uppercase tracking-widest border border-neutral-200">{item.code}</span>}
+          {item.code && <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full uppercase tracking-widest border border-emerald-200">{item.code}</span>}
           {categoryName && <span className="text-[10px] font-bold text-[#7F7F7F] bg-[#F5F5F5] px-3 py-1.5 rounded-full uppercase tracking-widest">{categoryName}</span>}
           {vendorName && <span className="text-[10px] font-bold text-black bg-white border border-neutral-200 px-3 py-1.5 rounded-full uppercase tracking-widest shadow-sm">{vendorName}</span>}
         </div>
