@@ -673,7 +673,7 @@ export default function App() {
                     <label className="block text-xs font-bold text-[#7F7F7F] mb-3 tracking-widest uppercase">淨肉率 / 良率 (%)</label>
                     <input 
                       type="number" min="1" max="100" value={rule.yieldRate}
-                      onChange={(e) => handleRuleChange(item.name, 'yieldRate', parseFloat(e.target.value) || 100)}
+                      onChange={(e) => handleRuleChange(item.name, 'yieldRate', e.target.value === '' ? '' : (parseFloat(e.target.value) || 0))}
                       className="w-full bg-[#F5F5F5] border-transparent rounded-[20px] px-5 py-4 text-black outline-none focus:ring-2 focus:ring-black font-black"
                     />
                   </div>
@@ -686,7 +686,7 @@ export default function App() {
                       <span className="text-[#7F7F7F] font-bold">=</span>
                       <input 
                         type="number" min="0.01" step="0.01" value={rule.recipeConversion || 1}
-                        onChange={(e) => handleRuleChange(item.name, 'recipeConversion', parseFloat(e.target.value) || 1)}
+                        onChange={(e) => handleRuleChange(item.name, 'recipeConversion', e.target.value === '' ? '' : (parseFloat(e.target.value) || 0))}
                         className="bg-white border border-neutral-200 rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-black w-24 text-center"
                       />
                       <select
@@ -987,23 +987,42 @@ export default function App() {
       );
     }
 
+    const [menuCategoryFilter, setMenuCategoryFilter] = useState('全部');
+    const menuCategoryList = useMemo(() => {
+      const cats = new Set(setMenus.map(m => m.menuCategory).filter(Boolean));
+      return ['全部', ...Array.from(cats)];
+    }, [setMenus]);
+    const filteredMenus = menuCategoryFilter === '全部' ? setMenus : setMenus.filter(m => m.menuCategory === menuCategoryFilter);
+
     return (
       <div className="animate-in fade-in duration-500 pb-24 md:pb-8">
-        <div className="flex justify-between items-end mb-8">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 mb-6">
           <div>
             <h2 className="text-3xl font-black text-black tracking-tight">{texts.tabSetMenus}</h2>
             <p className="text-[#7F7F7F] font-medium text-sm mt-2 tracking-wide">管理組合商品結構與毛利。</p>
           </div>
           <button 
-            onClick={() => setEditingMenu({ id: `sm-${Date.now()}`, name: '未命名新商品', sellingPrice: 0, categories: [] })}
-            className="bg-black hover:bg-neutral-800 text-white px-6 py-3.5 rounded-full font-bold text-sm flex items-center gap-2 shadow-[0_10px_20px_rgba(0,0,0,0.1)] transition-all"
+            onClick={() => setEditingMenu({ id: `sm-${Date.now()}`, name: '未命名新商品', menuCategory: '', sellingPrice: 0, categories: [] })}
+            className="bg-black hover:bg-neutral-800 text-white px-6 py-3.5 rounded-full font-bold text-sm flex items-center gap-2 shadow-[0_10px_20px_rgba(0,0,0,0.1)] transition-all shrink-0"
           >
             <Plus size={16} strokeWidth={3} /> 新增商品
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {setMenus.map(menu => {
+        {/* 分類篩選 */}
+        {menuCategoryList.length > 1 && (
+          <div className="flex flex-wrap gap-2 mb-6">
+            {menuCategoryList.map(cat => (
+              <button key={cat} onClick={() => setMenuCategoryFilter(cat)}
+                className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${menuCategoryFilter === cat ? 'bg-black text-white' : 'bg-[#F5F5F5] text-[#7F7F7F] hover:bg-neutral-200'}`}>
+                {cat}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
+          {filteredMenus.map(menu => {
             let totalIngredientsCost = 0; let totalItemsCount = 0;
             (menu.categories || []).forEach(cat => {
                (cat.items || []).forEach(ig => {
@@ -1017,29 +1036,48 @@ export default function App() {
             const margin = menu.sellingPrice > 0 ? (((menu.sellingPrice - totalCost) / menu.sellingPrice) * 100).toFixed(1) : 0;
             
             return (
-              <div key={menu.id} className="bg-white rounded-[32px] p-8 shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 flex flex-col hover:shadow-[0_20px_40px_rgba(0,0,0,0.06)] transition-all group">
-                <div className="flex justify-between items-start mb-6">
-                  <div className="w-12 h-12 bg-[#F5F5F5] rounded-full flex items-center justify-center"><Utensils size={20} className="text-black" strokeWidth={1.5}/></div>
-                  <button onClick={() => setEditingMenu(menu)} className="w-10 h-10 flex items-center justify-center text-neutral-400 hover:text-black bg-[#F5F5F5] rounded-full transition-colors"><Edit2 size={16} /></button>
+              <div key={menu.id} className="bg-white rounded-3xl p-6 shadow-[0_4px_24px_rgba(0,0,0,0.04)] border border-neutral-100 flex flex-col hover:shadow-[0_8px_32px_rgba(0,0,0,0.08)] transition-all group">
+                <div className="flex justify-between items-start mb-4">
+                  <div className="w-10 h-10 bg-[#F5F5F5] rounded-xl flex items-center justify-center"><Utensils size={18} className="text-black" strokeWidth={1.5}/></div>
+                  <div className="flex gap-1">
+                    <button onClick={() => setEditingMenu(menu)} className="p-2 text-neutral-300 hover:text-black hover:bg-[#F5F5F5] rounded-xl transition-colors"><Edit2 size={15} /></button>
+                    <button onClick={() => setSetMenus(prev => prev.filter(m => m.id !== menu.id))} className="p-2 text-neutral-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={15} /></button>
+                  </div>
                 </div>
-                <h3 className="text-2xl font-black text-black mb-3 tracking-tight">{menu.name}</h3>
-                <div className="flex items-center gap-2 mb-8 border-b border-neutral-100 pb-6">
-                   <span className="bg-[#F5F5F5] text-[#7F7F7F] text-xs font-bold px-3 py-1 rounded-full uppercase tracking-widest">{(menu.categories || []).length} 個分類</span>
-                   <span className="text-xs font-bold text-neutral-400">{totalItemsCount} 項食材</span>
+                <h3 className="text-lg font-black text-black mb-1 tracking-tight truncate">{menu.name}</h3>
+                {/* 分類標籤 — 可點擊編輯 */}
+                <div className="mb-4 pb-4 border-b border-neutral-100">
+                  <select
+                    value={menu.menuCategory || ''}
+                    onChange={e => {
+                      if (e.target.value === '__new__') {
+                        const newCat = prompt('請輸入新分類名稱：');
+                        if (newCat && newCat.trim()) setSetMenus(prev => prev.map(m => m.id === menu.id ? { ...m, menuCategory: newCat.trim() } : m));
+                      } else {
+                        setSetMenus(prev => prev.map(m => m.id === menu.id ? { ...m, menuCategory: e.target.value } : m));
+                      }
+                    }}
+                    className="text-[11px] font-bold text-[#9CA3AF] bg-[#F5F5F5] rounded-lg px-2 py-1 outline-none cursor-pointer hover:bg-neutral-200 transition-colors border-0"
+                  >
+                    <option value="">未分類</option>
+                    {menuCategoryList.filter(c => c !== '全部').map(c => <option key={c} value={c}>{c}</option>)}
+                    <option value="__new__">+ 新增分類...</option>
+                  </select>
+                  <span className="text-[11px] font-bold text-neutral-400 ml-2">{totalItemsCount} 項食材</span>
                 </div>
                 
-                <div className="mt-auto space-y-5">
+                <div className="mt-auto space-y-3">
                   <div className="flex justify-between items-center">
-                    <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">終端售價</span>
-                    <span className="font-black text-black text-lg">${menu.sellingPrice}</span>
+                    <span className="text-[11px] text-[#9CA3AF] font-bold">終端售價</span>
+                    <span className="font-black text-black">${menu.sellingPrice}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">總成本</span>
-                    <span className="font-black text-black text-lg">${totalCost.toFixed(1)}</span>
+                    <span className="text-[11px] text-[#9CA3AF] font-bold">總成本</span>
+                    <span className="font-black text-black">${totalCost.toFixed(1)}</span>
                   </div>
-                  <div className="flex justify-between items-center bg-[#F5F5F5] px-5 py-4 rounded-[20px]">
-                    <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">毛利率</span>
-                    <span className={`font-black text-xl ${margin >= 60 ? 'text-black' : margin >= 40 ? 'text-neutral-500' : 'text-red-500'}`}>{margin}%</span>
+                  <div className="flex justify-between items-center bg-[#F5F5F5] px-4 py-3 rounded-2xl">
+                    <span className="text-[11px] text-[#9CA3AF] font-bold">毛利率</span>
+                    <span className={`font-black text-lg ${margin >= 60 ? 'text-black' : margin >= 40 ? 'text-neutral-500' : 'text-red-500'}`}>{margin}%</span>
                   </div>
                 </div>
               </div>
@@ -1397,11 +1435,27 @@ export default function App() {
           ))}
         </nav>
         
-        <div className="p-6">
-          <div className="bg-[#F5F5F5] p-5 rounded-[24px]">
-             <div className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest mb-2">{texts.statusTitle}</div>
-             <div className="flex items-center gap-2 text-xs font-black text-black uppercase tracking-wide">
-               <div className="w-2 h-2 rounded-full bg-black animate-pulse"></div>
+        <div className="p-6 space-y-3">
+          {/* 同步按鈕 */}
+          <button 
+            onClick={() => handleSync(false)} disabled={isSyncing}
+            className={`w-full flex items-center justify-center gap-2.5 px-5 py-3 rounded-2xl font-bold transition-all bg-black text-white hover:bg-neutral-800 shadow-sm
+              ${isSyncing ? 'opacity-70 cursor-wait' : 'active:scale-[0.97]'}`}
+          >
+            <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+            <span className="text-sm">{isSyncing ? '同步中...' : '同步資料庫'}</span>
+          </button>
+          {syncMessage && (
+            <div className={`p-3 rounded-xl flex items-center text-xs font-bold
+              ${syncMessage.type === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-500 border border-red-200'}`}>
+              {syncMessage.type === 'success' ? <CheckCircle className="w-4 h-4 mr-2 shrink-0" /> : <AlertCircle className="w-4 h-4 mr-2 shrink-0" />}
+              <span className="truncate">{syncMessage.text}</span>
+            </div>
+          )}
+          {/* 狀態卡 */}
+          <div className="bg-[#F5F5F5] p-4 rounded-2xl">
+             <div className="flex items-center gap-2 text-xs font-black text-black">
+               <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
                {texts.statusText}
              </div>
           </div>
@@ -1438,26 +1492,8 @@ export default function App() {
                   />
                 </div>
               )}
-              
-              <button 
-                onClick={() => handleSync(false)} disabled={isSyncing}
-                className={`hidden md:flex items-center gap-3 px-6 py-3.5 rounded-full font-bold transition-all bg-white hover:bg-neutral-50 text-black shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100
-                  ${isSyncing ? 'opacity-50 cursor-wait' : 'active:scale-95'}`}
-              >
-                <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-                <span className="text-sm">同步資料庫</span>
-              </button>
             </div>
           </div>
-          
-          {syncMessage && (
-            <div className={`mt-4 p-4 rounded-[20px] flex items-center text-sm font-bold max-w-6xl mx-auto shadow-sm
-              ${syncMessage.type === 'success' ? 'bg-white text-black border border-neutral-200' : 'bg-[#FEF2F2] border-[#FECACA] border text-[#EF4444]'}`}
-            >
-              {syncMessage.type === 'success' ? <CheckCircle className="w-5 h-5 mr-3" /> : <AlertCircle className="w-5 h-5 mr-3" />}
-              {syncMessage.text}
-            </div>
-          )}
         </header>
 
         <main className="flex-1 p-4 md:px-10 md:pb-10 max-w-6xl mx-auto w-full">
@@ -1490,36 +1526,48 @@ export default function App() {
 }
 
 function IngredientCard({ item, categoryName, vendorName }) {
+  const hasConversion = item.recipeConversion > 1 && item.recipeUnit !== item.unit;
   return (
-    <div className="bg-white rounded-[32px] border border-neutral-100 shadow-[0_10px_30px_rgba(0,0,0,0.03)] hover:shadow-[0_20px_40px_rgba(0,0,0,0.06)] hover:border-black transition-all overflow-hidden flex flex-col group">
-      <div className="p-6 md:p-8 border-b border-neutral-100 flex flex-col gap-4">
-        <div className="flex gap-2">
-          {item.code && <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full uppercase tracking-widest border border-emerald-200">{item.code}</span>}
-          {categoryName && <span className="text-[10px] font-bold text-[#7F7F7F] bg-[#F5F5F5] px-3 py-1.5 rounded-full uppercase tracking-widest">{categoryName}</span>}
-          {vendorName && <span className="text-[10px] font-bold text-black bg-white border border-neutral-200 px-3 py-1.5 rounded-full uppercase tracking-widest shadow-sm">{vendorName}</span>}
+    <div className="bg-white rounded-3xl border border-neutral-100 shadow-[0_4px_24px_rgba(0,0,0,0.04)] hover:shadow-[0_8px_32px_rgba(0,0,0,0.08)] hover:border-black transition-all overflow-hidden flex flex-col group">
+      {/* 標頭 */}
+      <div className="px-6 pt-6 pb-4">
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {item.code && <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 tracking-widest">{item.code}</span>}
+          {categoryName && <span className="text-[10px] font-bold text-[#9CA3AF] bg-[#F5F5F5] px-2.5 py-1 rounded-lg">{categoryName}</span>}
+          {vendorName && <span className="text-[10px] font-bold text-[#9CA3AF] bg-[#F5F5F5] px-2.5 py-1 rounded-lg">{vendorName}</span>}
         </div>
-        <h3 className="text-2xl font-black text-black leading-tight tracking-tight">{item.name}</h3>
+        <h3 className="text-xl font-black text-black tracking-tight truncate">{item.name}</h3>
+      </div>
+
+      {/* 進貨單價 */}
+      <div className="px-6 py-3 border-t border-neutral-50">
+        <div className="flex justify-between items-center">
+          <span className="text-[11px] text-[#9CA3AF] font-bold">進貨單價</span>
+          <span className="font-black text-black text-lg">${item.rawPrice} <span className="text-xs text-[#9CA3AF] font-medium">/{item.unit}</span></span>
+        </div>
       </div>
       
-      <div className="p-6 md:p-8 flex-grow flex flex-col space-y-6">
-        <div className="flex justify-between items-center border-b border-neutral-100 pb-4">
-          <span className="text-[#7F7F7F] font-bold uppercase tracking-widest text-[10px]">最新進貨單價</span>
-          <span className="font-black text-black text-xl">${item.rawPrice} <span className="text-xs text-[#7F7F7F] font-medium">/{item.unit}</span></span>
+      {/* 成本算法 */}
+      <div className="mx-6 my-3 bg-[#F5F5F5] rounded-2xl px-4 py-3">
+        <span className="text-[10px] text-[#9CA3AF] font-bold block mb-1">成本算法</span>
+        <span className="text-black font-bold text-sm">{item.calculation}</span>
+      </div>
+      
+      {/* 成本結果 */}
+      <div className="px-6 pb-6 pt-3 mt-auto space-y-2">
+        {/* 每進貨單位成本 */}
+        <div className="flex justify-between items-center">
+          <span className="text-[11px] text-[#9CA3AF] font-bold">每{item.unit}成本</span>
+          <span className="font-black text-black text-lg">${typeof item.finalCost === 'number' ? item.finalCost.toFixed(1) : item.finalCost} <span className="text-xs text-[#9CA3AF] font-medium">/{item.unit}</span></span>
         </div>
-        
-        <div className="bg-[#F5F5F5] rounded-[20px] p-5">
-          <span className="block text-[#7F7F7F] font-bold mb-2 text-[10px] uppercase tracking-widest">成本算法</span>
-          <span className="text-black font-bold text-sm tracking-wide">{item.calculation}</span>
-        </div>
-        
-        <div className="pt-2 mt-auto flex justify-between items-end">
-          <span className="text-[#7F7F7F] text-[10px] font-bold uppercase tracking-widest mb-1.5">精算盤點成本</span>
-          <div className="flex items-center text-black">
-            <DollarSign className="w-5 h-5 mr-0.5 opacity-40" />
-            <span className="text-3xl font-black tracking-tighter">{typeof item.finalCost === 'number' ? item.finalCost.toFixed(1) : item.finalCost}</span>
-            <span className="text-sm ml-1 font-medium opacity-50">/{item.unit}</span>
+
+        {/* 每配方單位成本 (如有轉換) */}
+        {hasConversion && (
+          <div className="flex justify-between items-center bg-[#111] px-4 py-3 rounded-2xl">
+            <span className="text-[11px] text-neutral-400 font-bold">每{item.recipeUnit}成本</span>
+            <span className="font-black text-white text-lg">${item.recipeCost < 1 ? item.recipeCost.toFixed(4) : item.recipeCost.toFixed(2)} <span className="text-xs text-neutral-500 font-medium">/{item.recipeUnit}</span></span>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
