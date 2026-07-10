@@ -135,6 +135,7 @@ export default function App() {
   const [setMenus, setSetMenus] = useState(initialSetMenus);
 
   const [foodCostPercent, setFoodCostPercent] = useState(33.33);
+  const [menuCategoryFilter, setMenuCategoryFilter] = useState('全部');
   const [isEditingUI, setIsEditingUI] = useState(false);
   const [tempUITexts, setTempUITexts] = useState(defaultUITexts);
   const [tempSystemName, setTempSystemName] = useState(defaultGlobalSettings.systemName);
@@ -209,6 +210,11 @@ export default function App() {
     const cats = new Set(uniqueProductsForSettings.map(item => item.category));
     return ['全部', ...Array.from(cats)];
   }, [uniqueProductsForSettings]);
+
+  const menuCategoryList = useMemo(() => {
+    const cats = new Set(setMenus.map(m => m.menuCategory).filter(Boolean));
+    return ['全部', ...Array.from(cats)];
+  }, [setMenus]);
 
   const filteredSettingsProducts = useMemo(() => {
     return uniqueProductsForSettings.filter(item => {
@@ -987,11 +993,6 @@ export default function App() {
       );
     }
 
-    const [menuCategoryFilter, setMenuCategoryFilter] = useState('全部');
-    const menuCategoryList = useMemo(() => {
-      const cats = new Set(setMenus.map(m => m.menuCategory).filter(Boolean));
-      return ['全部', ...Array.from(cats)];
-    }, [setMenus]);
     const filteredMenus = menuCategoryFilter === '全部' ? setMenus : setMenus.filter(m => m.menuCategory === menuCategoryFilter);
 
     return (
