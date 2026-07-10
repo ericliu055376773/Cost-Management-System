@@ -1092,29 +1092,25 @@ export default function App() {
           <div className="flex flex-col lg:flex-row lg:items-center gap-6 lg:gap-10">
             <div className="flex-1">
               <span className="block text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest mb-3">售價公式</span>
-              <div className="bg-[#F5F5F5] rounded-[20px] p-5 flex flex-wrap items-center gap-3 text-lg font-black text-black tracking-tight">
+              <div className="bg-[#F5F5F5] rounded-[20px] p-4 sm:p-5 flex flex-wrap items-center gap-2 sm:gap-3 text-base sm:text-lg font-black text-black tracking-tight">
                 <span>售價</span>
                 <span className="text-[#7F7F7F] font-medium">=</span>
-                <span>食材成本</span>
+                <span className="text-sm sm:text-lg">食材成本</span>
                 <span className="text-[#7F7F7F] font-medium">÷</span>
-                <div className="inline-flex items-center bg-white rounded-[14px] border border-neutral-200 shadow-sm px-3 py-1.5">
+                <div className="inline-flex items-center bg-white rounded-xl border border-neutral-200 shadow-sm px-2 sm:px-3 py-1.5">
                   <input
                     type="number" value={foodCostPercent}
                     onChange={e => setFoodCostPercent(parseFloat(e.target.value) || 0)}
-                    className="bg-transparent outline-none font-black text-black w-16 text-center text-lg"
+                    className="bg-transparent outline-none font-black text-black w-14 sm:w-16 text-center text-base sm:text-lg"
                     step="0.01" min="0" max="100"
                   />
-                  <span className="text-[#7F7F7F] font-bold text-base">%</span>
+                  <span className="text-[#7F7F7F] font-bold text-sm sm:text-base">%</span>
                 </div>
-                <span className="text-[#7F7F7F] font-medium">=</span>
-                <span>食材成本</span>
-                <span className="text-[#7F7F7F] font-medium">×</span>
-                <span className="bg-black text-white px-4 py-1.5 rounded-[14px] text-lg">{multiplier.toFixed(2)}</span>
               </div>
             </div>
-            <div className="flex flex-col items-center bg-[#F5F5F5] rounded-[24px] p-5 lg:px-8 shrink-0">
-              <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest mb-1">目標食材成本佔比</span>
-              <span className="text-4xl font-black text-black">{foodCostPercent}%</span>
+            <div className="flex flex-col items-center bg-[#F5F5F5] rounded-[20px] sm:rounded-[24px] p-4 sm:p-5 lg:px-8 shrink-0">
+              <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest mb-1">成本佔比</span>
+              <span className="text-3xl sm:text-4xl font-black text-black">{foodCostPercent}%</span>
               <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest mt-1">倍率 ×{multiplier.toFixed(2)}</span>
             </div>
           </div>
@@ -1135,52 +1131,58 @@ export default function App() {
               <div className="w-8 h-8 bg-black rounded-full flex items-center justify-center"><Utensils size={14} className="text-white" /></div>
               商品建議售價
             </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {menuPricingData.map(menu => (
-                <div key={menu.id} className="bg-white rounded-[32px] p-8 shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 flex flex-col hover:shadow-[0_20px_40px_rgba(0,0,0,0.06)] transition-all">
-                  <div className="flex justify-between items-start mb-4">
-                    <div className="w-12 h-12 bg-[#F5F5F5] rounded-full flex items-center justify-center"><Tag size={20} className="text-black" strokeWidth={1.5}/></div>
-                    <div className="flex gap-2">
-                      <button onClick={() => { setEditingMenu(menu); setCurrentTab('setMenus'); }} className="p-2 text-neutral-400 hover:text-black hover:bg-[#F5F5F5] rounded-full transition-colors" title="編輯配方"><Edit2 size={16} /></button>
-                      <button onClick={() => setSetMenus(prev => prev.filter(m => m.id !== menu.id))} className="p-2 text-neutral-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors" title="刪除"><Trash2 size={16} /></button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
+              {menuPricingData.map(menu => {
+                const costRatio = menu.sellingPrice > 0 ? (menu.totalIngredientsCost / menu.sellingPrice * 100) : 0;
+                const isOverBudget = costRatio > foodCostPercent;
+                return (
+                <div key={menu.id} className="bg-white rounded-3xl shadow-[0_4px_24px_rgba(0,0,0,0.04)] border border-neutral-100 overflow-hidden hover:shadow-[0_8px_32px_rgba(0,0,0,0.08)] transition-all">
+                  {/* 卡片頂部 */}
+                  <div className="px-6 pt-6 pb-4 flex justify-between items-start">
+                    <div className="flex-1 min-w-0 mr-3">
+                      <h4 className="text-lg font-black text-black tracking-tight truncate">{menu.name}</h4>
+                      <p className="text-xs text-[#9CA3AF] font-bold mt-1">食材成本 <span className="text-black">${menu.totalIngredientsCost.toFixed(1)}</span></p>
+                    </div>
+                    <div className="flex gap-1 shrink-0">
+                      <button onClick={() => { setEditingMenu(menu); setCurrentTab('setMenus'); }} className="p-2 text-neutral-300 hover:text-black hover:bg-[#F5F5F5] rounded-xl transition-colors"><Edit2 size={15} /></button>
+                      <button onClick={() => setSetMenus(prev => prev.filter(m => m.id !== menu.id))} className="p-2 text-neutral-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={15} /></button>
                     </div>
                   </div>
-                  <h4 className="text-2xl font-black text-black mb-6 tracking-tight">{menu.name}</h4>
-                  
-                  <div className="space-y-4 mt-auto">
-                    <div className="flex justify-between items-center">
-                      <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">食材成本</span>
-                      <span className="font-black text-black text-lg">${menu.totalIngredientsCost.toFixed(1)}</span>
+
+                  {/* 建議售價 — 主視覺 */}
+                  <div className="mx-5 bg-[#111] rounded-2xl px-5 py-4 flex justify-between items-center">
+                    <span className="text-xs text-neutral-500 font-bold shrink-0">建議售價</span>
+                    <div className="text-right min-w-0">
+                      <span className="text-2xl font-black text-white">${menu.roundedPrice}</span>
+                      <span className="text-[11px] text-neutral-500 font-bold ml-1.5 hidden sm:inline">(${menu.suggestedPrice.toFixed(0)})</span>
                     </div>
+                  </div>
+
+                  {/* 底部資訊 */}
+                  <div className="px-6 py-4 space-y-3">
                     <div className="flex justify-between items-center">
-                      <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">目前終端售價</span>
-                      <div className="flex items-center gap-1">
-                        <span className="text-[#7F7F7F] font-bold">$</span>
+                      <span className="text-[11px] text-[#9CA3AF] font-bold">終端售價</span>
+                      <div className="flex items-center">
+                        <span className="text-[#9CA3AF] text-sm mr-0.5">$</span>
                         <input 
                           type="number" min="0" value={menu.sellingPrice || 0}
                           onChange={e => setSetMenus(prev => prev.map(m => m.id === menu.id ? { ...m, sellingPrice: parseFloat(e.target.value) || 0 } : m))}
-                          className="font-black text-black text-lg bg-transparent outline-none w-20 text-right focus:bg-[#F5F5F5] rounded-lg px-2 py-1 transition-colors"
+                          className="font-black text-black text-base bg-transparent outline-none w-16 text-right focus:bg-[#F5F5F5] rounded-lg px-1 py-0.5 transition-colors"
                         />
                       </div>
                     </div>
-                    <div className="flex justify-between items-center bg-black px-5 py-4 rounded-[20px]">
-                      <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">建議售價</span>
-                      <div className="flex items-center gap-2">
-                        <span className="font-black text-white text-2xl">${menu.roundedPrice}</span>
-                        <span className="text-xs text-neutral-500 font-bold">(${menu.suggestedPrice.toFixed(1)})</span>
-                      </div>
-                    </div>
                     {menu.sellingPrice > 0 && (
-                      <div className="flex justify-between items-center bg-[#F5F5F5] px-5 py-3 rounded-[16px]">
-                        <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">目前食材佔比</span>
-                        <span className={`font-black text-base ${(menu.totalIngredientsCost / menu.sellingPrice * 100) <= foodCostPercent ? 'text-black' : 'text-red-500'}`}>
-                          {(menu.totalIngredientsCost / menu.sellingPrice * 100).toFixed(1)}%
+                      <div className="flex justify-between items-center">
+                        <span className="text-[11px] text-[#9CA3AF] font-bold">食材佔比</span>
+                        <span className={`text-sm font-black ${isOverBudget ? 'text-red-500' : 'text-emerald-600'}`}>
+                          {costRatio.toFixed(1)}%
                         </span>
                       </div>
                     )}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
