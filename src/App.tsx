@@ -273,12 +273,12 @@ export default function App() {
           if (data.rules) setProductRules(prev => ({ ...prev, ...data.rules }));
           if (data.globalSettings) setGlobalSettings(prev => ({ ...prev, ...data.globalSettings }));
           if (data.codeMappings) {
-            // 將雲端儲存的代號對照表套用到現有食材
             setRawErpData(prev => prev.map(item => {
               const key = `${item.vendor}-${item.name}`;
               return data.codeMappings[key] ? { ...item, code: data.codeMappings[key] } : item;
             }));
           }
+          if (data.setMenus && data.setMenus.length > 0) setSetMenus(data.setMenus);
       }
     }, (error) => {
       console.error("Error listening to rules:", error);
@@ -382,6 +382,29 @@ export default function App() {
        await setDoc(rulesRef, { rules: editingRules, globalSettings: editingGlobalSettings, codeMappings }, { merge: true });
        setSyncMessage({ type: 'success', text: '參數儲存成功！' });
        setCurrentTab('ingredients'); 
+    } catch(e) {
+       console.error(e);
+       setSyncMessage({ type: 'error', text: '儲存失敗，請檢查網路連線。' });
+    } finally {
+       setIsSyncing(false);
+       setTimeout(() => setSyncMessage(null), 3000);
+    }
+  };
+
+  const saveAllToCloud = async () => {
+    if (!firebaseUser) return;
+    setIsSyncing(true);
+    try {
+       const codeMappings = {};
+       rawErpData.forEach(item => {
+         if (item.code) codeMappings[`${item.vendor}-${item.name}`] = item.code;
+       });
+       const rulesRef = doc(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_cost_rules', 'rules');
+       await setDoc(rulesRef, { 
+         rules: editingRules, globalSettings: editingGlobalSettings, codeMappings,
+         setMenus: setMenus
+       }, { merge: true });
+       setSyncMessage({ type: 'success', text: '全部資料已儲存！' });
     } catch(e) {
        console.error(e);
        setSyncMessage({ type: 'error', text: '儲存失敗，請檢查網路連線。' });
@@ -1437,6 +1460,15 @@ export default function App() {
         </nav>
         
         <div className="p-6 space-y-3">
+          {/* 一鍵儲存 */}
+          <button 
+            onClick={saveAllToCloud} disabled={isSyncing}
+            className={`w-full flex items-center justify-center gap-2.5 px-5 py-3 rounded-2xl font-bold transition-all bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm
+              ${isSyncing ? 'opacity-70 cursor-wait' : 'active:scale-[0.97]'}`}
+          >
+            <Save className="w-4 h-4" />
+            <span className="text-sm">儲存所有設定</span>
+          </button>
           {/* 同步按鈕 */}
           <button 
             onClick={() => handleSync(false)} disabled={isSyncing}
