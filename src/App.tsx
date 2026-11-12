@@ -1,38 +1,26 @@
 // @ts-nocheck
-import React, { useState, useMemo, useEffect } from 'react';
-import { Search, Lock, ChevronLeft, Package, RefreshCw, Calculator, DollarSign, Beef, Carrot, Fish, Coffee, CheckCircle, AlertCircle, Utensils, Plus, Trash2, Edit2, Layers, ChevronRight, Store, Settings, Save, Scale, Receipt, FolderPlus, Tag, Filter, Type } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { Search, Lock, ChevronLeft, Package, Calculator, DollarSign, Beef, Carrot, Fish, Coffee, CheckCircle, AlertCircle, Utensils, Plus, Trash2, Edit2, Layers, ChevronRight, Store, Settings, Save, Scale, Receipt, FolderPlus, Tag, Type, Download, Upload, RotateCcw, X, Database } from 'lucide-react';
 
 // ==========================================
-// Firebase 雲端資料庫設定
+// 本機資料儲存（獨立版，不再連接任何雲端或進貨系統）
+// 所有資料存放在瀏覽器 localStorage，可於「成本參數」頁匯出 / 匯入備份
 // ==========================================
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, getDocs, doc, setDoc, onSnapshot } from 'firebase/firestore';
+const STORAGE_KEY = 'cost-management-system-data-v1';
 
-// 兼容 Canvas 環境與原廠設定
-const fallbackConfig = {
-  apiKey: "AIzaSyAc0LGsLeEBcJ3fOj08NwAWbZL0d3GKHrA",
-  authDomain: "ypxerp.firebaseapp.com",
-  projectId: "ypxerp",
-  storageBucket: "ypxerp.firebasestorage.app",
-  messagingSenderId: "684981995411",
-  appId: "1:684981995411:web:a32310ced01fc8ca964a66",
-  measurementId: "G-MFJ8WW5707"
-};
+const newUid = () => `u-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const withUids = (list) => list.map((item) => ({ ...item, uid: item.uid || newUid() }));
 
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : fallbackConfig;
-const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const erpAppId = typeof __app_id !== 'undefined' ? __app_id : 'hotpot-erp-system';
-
-// 預設分類判斷邏輯 (新增蛤仔判斷)
-const inferCategory = (itemName) => {
-  if (/牛|豬|雞|羊|肉|鴨|鵝/.test(itemName)) return '肉類';
-  if (/蝦|魚|蟹|干貝|透抽|蛤|蚵|海鮮|花枝|魷/.test(itemName)) return '海鮮類';
-  if (/菜|蔥|蒜|菇|瓜|蘿蔔|洋蔥|番茄|筍|芋|蓮/.test(itemName)) return '蔬菜類';
-  if (/餃|丸|豆腐|豆皮|血|漿|麵|冬粉|飯/.test(itemName)) return '火鍋料與副餐';
-  return '飲品與其他';
+const loadSavedData = () => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    return data && typeof data === 'object' ? data : null;
+  } catch (e) {
+    console.error('讀取本機資料失敗:', e);
+    return null;
+  }
 };
 
 // 極簡金融風格：單色輪廓圖示與極簡底色
@@ -77,7 +65,7 @@ const defaultUITexts = {
   tabSettings: '成本參數',
   tabSellingPrice: '售價金額',
   statusTitle: '系統狀態',
-  statusText: '雲端已連線'
+  statusText: '資料儲存於本機'
 };
 
 const defaultGlobalSettings = { taxRate: 5, systemName: 'FINERP', uiTexts: defaultUITexts };
@@ -105,7 +93,7 @@ const initialSetMenus = [
 ];
 
 export default function App() {
-  const [firebaseUser, setFirebaseUser] = useState(null);
+  const [initialSaved] = useState(loadSavedData);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
@@ -113,8 +101,9 @@ export default function App() {
   const [isShaking, setIsShaking] = useState(false); 
   
   const [currentTab, setCurrentTab] = useState('ingredients'); 
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [syncMessage, setSyncMessage] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [editingIngredient, setEditingIngredient] = useState(null);
+  const fileInputRef = useRef(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState(null); 
@@ -126,15 +115,19 @@ export default function App() {
   const [settingsCategoryFilter, setSettingsCategoryFilter] = useState('全部');
   const [settingsSearchQuery, setSettingsSearchQuery] = useState('');
   
-  const [rawErpData, setRawErpData] = useState(initialRawData); 
-  const [productRules, setProductRules] = useState(defaultRules); 
-  const [globalSettings, setGlobalSettings] = useState(defaultGlobalSettings);
+  const [rawErpData, setRawErpData] = useState(() => withUids(Array.isArray(initialSaved?.rawErpData) ? initialSaved.rawErpData : initialRawData));
+  const [productRules, setProductRules] = useState(() => initialSaved?.productRules ?? defaultRules);
+  const [globalSettings, setGlobalSettings] = useState(() => ({
+    ...defaultGlobalSettings,
+    ...(initialSaved?.globalSettings || {}),
+    uiTexts: { ...defaultUITexts, ...(initialSaved?.globalSettings?.uiTexts || {}) }
+  }));
   
   const [editingRules, setEditingRules] = useState({}); 
   const [editingGlobalSettings, setEditingGlobalSettings] = useState(defaultGlobalSettings);
-  const [setMenus, setSetMenus] = useState(initialSetMenus);
+  const [setMenus, setSetMenus] = useState(() => Array.isArray(initialSaved?.setMenus) ? initialSaved.setMenus : initialSetMenus);
 
-  const [foodCostPercent, setFoodCostPercent] = useState(33.33);
+  const [foodCostPercent, setFoodCostPercent] = useState(() => typeof initialSaved?.foodCostPercent === 'number' ? initialSaved.foodCostPercent : 33.33);
   const [menuCategoryFilter, setMenuCategoryFilter] = useState('全部');
   const [isEditingUI, setIsEditingUI] = useState(false);
   const [tempUITexts, setTempUITexts] = useState(defaultUITexts);
@@ -159,6 +152,7 @@ export default function App() {
        
        grouped[item.category][item.vendor].push({
           id: `item-${item.code || item.vendor + '-' + item.name}`,
+          uid: item.uid,
           code: item.code || '',
           name: item.name,
           rawPrice: item.rawPrice,
@@ -243,50 +237,6 @@ export default function App() {
     }
   }, [pin]);
 
-  // Firebase Auth Initialization
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (err) {
-         console.error('Firebase Auth Error:', err);
-      }
-    };
-    initAuth();
-    
-    const unsubscribe = onAuthStateChanged(auth, setFirebaseUser);
-    return () => unsubscribe();
-  }, []);
-
-  // Firebase Data Fetching
-  useEffect(() => {
-    if (!firebaseUser) return;
-    
-    const rulesRef = doc(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_cost_rules', 'rules');
-    const unsubscribe = onSnapshot(rulesRef, (docSnap) => {
-      if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data.rules) setProductRules(prev => ({ ...prev, ...data.rules }));
-          if (data.globalSettings) setGlobalSettings(prev => ({ ...prev, ...data.globalSettings }));
-          if (data.codeMappings) {
-            setRawErpData(prev => prev.map(item => {
-              const key = `${item.vendor}-${item.name}`;
-              return data.codeMappings[key] ? { ...item, code: data.codeMappings[key] } : item;
-            }));
-          }
-          if (data.setMenus && data.setMenus.length > 0) setSetMenus(data.setMenus);
-      }
-    }, (error) => {
-      console.error("Error listening to rules:", error);
-    });
-
-    return () => unsubscribe();
-  }, [firebaseUser]);
-
   useEffect(() => {
     if (currentTab === 'settings') {
       setEditingRules(productRules);
@@ -295,123 +245,144 @@ export default function App() {
   }, [currentTab, productRules, globalSettings]);
 
   // ==========================================
-  // ⚡ 強化版同步函式 (完全透明進度與錯誤)
+  // 本機儲存、提示訊息
   // ==========================================
-  const handleSync = async (isAuto = false) => {
-    if (!firebaseUser) return;
-    
-    setIsSyncing(true);
-    setSyncMessage(null); 
-    try {
-      // 先讀取 YPX 商品庫的代號對照表
-      const productsRef = collection(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_products');
-      const productsSnapshot = await getDocs(productsRef);
-      const productCodeMap = {};
-      productsSnapshot.docs.forEach(d => {
-        const p = d.data();
-        if (p.code) { productCodeMap[p.name] = p.code; productCodeMap[p.id || d.id] = p.code; }
-      });
-
-      const ordersRef = collection(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_orders');
-      const querySnapshot = await getDocs(ordersRef);
-      const ordersList = querySnapshot.docs.map(doc => doc.data()).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-      const finalProductsMap = new Map();
-      
-      let totalItemsImported = 0;
-
-      ordersList.forEach(order => {
-         const orderVendor = order.id.split('-').slice(1, -1).join('-') || '';
-         if (Array.isArray(order.items)) {
-           order.items.forEach(item => {
-              if (item.name) {
-                totalItemsImported++;
-                const cat = item.category || inferCategory(item.name);
-                const vendorName = orderVendor || item.category || cat || '未分類廠商';
-                const itemCode = item.code || productCodeMap[item.name] || productCodeMap[item.id] || '';
-                const key = itemCode || `${vendorName}-${item.name}`; 
-                finalProductsMap.set(key, {
-                   category: cat, vendor: vendorName, name: item.name, code: itemCode,
-                   rawPrice: parseFloat(item.price) || 0, unit: item.unit || '件'
-                });
-              }
-           });
-         }
-      });
-
-      const newRawData = Array.from(finalProductsMap.values());
-      
-      // 關鍵修改：不論有沒有抓到資料，都強制蓋掉預設的假資料 (雞腿肉那些)
-      // 這樣如果連線成功但抓到 0 筆資料，畫面也會變空，不會讓使用者誤以為沒同步
-      setRawErpData(newRawData); 
-
-      if (newRawData.length > 0) {
-        setSyncMessage({ type: 'success', text: `✅ 同步成功！讀取 ${ordersList.length} 張單據，匯入 ${newRawData.length} 項食材。` });
-      } else {
-        setSyncMessage({ type: 'error', text: `⚠️ 連線成功，但資料庫內目前沒有任何食材名稱。(找到 ${ordersList.length} 張空單據)` });
-      }
-    } catch (err) {
-      console.error('Firebase 同步錯誤:', err);
-      // 如果被權限擋住，會在這裡清楚顯示
-      setSyncMessage({ type: 'error', text: `❌ 同步被拒絕: ${err.message} (請確認 Firebase 白名單設定)` });
-    } finally {
-      setIsSyncing(false);
-      // 把訊息停留時間拉長到 8 秒，讓使用者能看清楚
-      setTimeout(() => setSyncMessage(null), 8000);
-    }
+  const showNotice = (type, text) => {
+    setNotice({ type, text });
+    setTimeout(() => setNotice(null), 4000);
   };
 
+  // 資料有變動時自動存入瀏覽器
   useEffect(() => {
-    if (isAuthenticated) {
-      handleSync(true); // 登入後自動執行背景同步
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated, firebaseUser]);
-
-  const saveSettingsToCloud = async () => {
-    if (!firebaseUser) return;
-    setIsSyncing(true);
     try {
-       // 建立代號對照表存入雲端
-       const codeMappings = {};
-       rawErpData.forEach(item => {
-         if (item.code) {
-           codeMappings[`${item.vendor}-${item.name}`] = item.code;
-         }
-       });
-       const rulesRef = doc(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_cost_rules', 'rules');
-       await setDoc(rulesRef, { rules: editingRules, globalSettings: editingGlobalSettings, codeMappings }, { merge: true });
-       setSyncMessage({ type: 'success', text: '參數儲存成功！' });
-       setCurrentTab('ingredients'); 
-    } catch(e) {
-       console.error(e);
-       setSyncMessage({ type: 'error', text: '儲存失敗，請檢查網路連線。' });
-    } finally {
-       setIsSyncing(false);
-       setTimeout(() => setSyncMessage(null), 3000);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        version: 1, rawErpData, productRules, globalSettings, setMenus, foodCostPercent
+      }));
+    } catch (e) {
+      console.error('本機儲存失敗:', e);
+      showNotice('error', '儲存失敗：瀏覽器儲存空間不足或已停用。');
     }
+  }, [rawErpData, productRules, globalSettings, setMenus, foodCostPercent]);
+
+  const saveSettings = () => {
+    setProductRules(editingRules);
+    setGlobalSettings(editingGlobalSettings);
+    showNotice('success', '參數儲存成功！');
+    setCurrentTab('ingredients');
   };
 
-  const saveAllToCloud = async () => {
-    if (!firebaseUser) return;
-    setIsSyncing(true);
-    try {
-       const codeMappings = {};
-       rawErpData.forEach(item => {
-         if (item.code) codeMappings[`${item.vendor}-${item.name}`] = item.code;
-       });
-       const rulesRef = doc(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_cost_rules', 'rules');
-       await setDoc(rulesRef, { 
-         rules: editingRules, globalSettings: editingGlobalSettings, codeMappings,
-         setMenus: setMenus
-       }, { merge: true });
-       setSyncMessage({ type: 'success', text: '全部資料已儲存！' });
-    } catch(e) {
-       console.error(e);
-       setSyncMessage({ type: 'error', text: '儲存失敗，請檢查網路連線。' });
-    } finally {
-       setIsSyncing(false);
-       setTimeout(() => setSyncMessage(null), 3000);
+  // ==========================================
+  // 備份 / 匯入 / 還原
+  // ==========================================
+  const handleExport = () => {
+    const data = {
+      app: 'cost-management-system', version: 1, exportedAt: new Date().toISOString(),
+      rawErpData, productRules, globalSettings, setMenus, foodCostPercent
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cost-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showNotice('success', '備份檔已匯出。');
+  };
+
+  const handleImport = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (!data || !Array.isArray(data.rawErpData)) throw new Error('格式不符');
+        if (!window.confirm('匯入會覆蓋目前所有資料，確定要繼續嗎？')) return;
+        setRawErpData(withUids(data.rawErpData));
+        setProductRules(data.productRules || {});
+        setGlobalSettings({
+          ...defaultGlobalSettings,
+          ...(data.globalSettings || {}),
+          uiTexts: { ...defaultUITexts, ...(data.globalSettings?.uiTexts || {}) }
+        });
+        setSetMenus(Array.isArray(data.setMenus) ? data.setMenus : []);
+        setFoodCostPercent(typeof data.foodCostPercent === 'number' ? data.foodCostPercent : 33.33);
+        showNotice('success', '備份匯入成功！');
+      } catch (err) {
+        console.error(err);
+        showNotice('error', '匯入失敗：檔案格式不正確。');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleResetAll = () => {
+    if (!window.confirm('這會清除所有食材、規則與商品配方並還原為預設範例資料，確定嗎？（建議先匯出備份）')) return;
+    setRawErpData(withUids(initialRawData));
+    setProductRules(defaultRules);
+    setGlobalSettings(defaultGlobalSettings);
+    setSetMenus(initialSetMenus);
+    setFoodCostPercent(33.33);
+    setEditingRules(defaultRules);
+    setEditingGlobalSettings(defaultGlobalSettings);
+    showNotice('success', '已還原為預設資料。');
+  };
+
+  // ==========================================
+  // 食材管理（新增 / 編輯 / 刪除）
+  // ==========================================
+  const openNewIngredient = (preset = {}) => {
+    setEditingIngredient({ uid: null, category: preset.category || '', vendor: preset.vendor || '', name: '', code: '', rawPrice: '', unit: 'kg' });
+  };
+
+  const openEditIngredient = (uid) => {
+    const raw = rawErpData.find(i => i.uid === uid);
+    if (raw) setEditingIngredient({ ...raw });
+  };
+
+  const handleSaveIngredient = () => {
+    const f = editingIngredient;
+    const name = (f.name || '').trim();
+    const category = (f.category || '').trim();
+    const vendor = (f.vendor || '').trim();
+    const unit = (f.unit || '').trim();
+    const code = (f.code || '').trim().toUpperCase();
+    const price = parseFloat(f.rawPrice);
+
+    if (!name || !category || !vendor || !unit) { showNotice('error', '請填寫名稱、分類、廠商與單位。'); return; }
+    if (isNaN(price) || price < 0) { showNotice('error', '請輸入正確的進貨單價。'); return; }
+    if (code && rawErpData.some(i => i.code === code && i.uid !== f.uid)) { showNotice('error', `代號 ${code} 已被其他食材使用。`); return; }
+    if (rawErpData.some(i => i.uid !== f.uid && i.name === name && i.vendor === vendor)) { showNotice('error', '此廠商已有同名食材。'); return; }
+
+    const entry = { uid: f.uid || newUid(), category, vendor, name, code, rawPrice: price, unit };
+
+    if (f.uid) {
+      const old = rawErpData.find(i => i.uid === f.uid);
+      setRawErpData(prev => prev.map(i => i.uid === f.uid ? entry : i));
+      // 改名時，把原本的良率 / 規格轉換規則一併帶過去
+      if (old && old.name !== name && productRules[old.name] && !rawErpData.some(i => i.uid !== f.uid && i.name === old.name)) {
+        setProductRules(prev => {
+          const next = { ...prev, [name]: prev[name] || prev[old.name] };
+          delete next[old.name];
+          return next;
+        });
+      }
+    } else {
+      setRawErpData(prev => [...prev, entry]);
     }
+    setEditingIngredient(null);
+    showNotice('success', f.uid ? '食材已更新。' : '食材已新增。');
+  };
+
+  const handleDeleteIngredient = (uid) => {
+    const target = rawErpData.find(i => i.uid === uid);
+    if (!target) return;
+    if (!window.confirm(`確定要刪除「${target.name}」嗎？`)) return;
+    setRawErpData(prev => prev.filter(i => i.uid !== uid));
+    showNotice('success', '食材已刪除。');
   };
 
   const openUIEditor = () => {
@@ -420,18 +391,10 @@ export default function App() {
     setIsEditingUI(true);
   };
 
-  const saveUITexts = async () => {
-    if (!firebaseUser) return;
+  const saveUITexts = () => {
     const newSettings = { ...globalSettings, uiTexts: tempUITexts, systemName: tempSystemName };
-    try {
-       const rulesRef = doc(db, 'artifacts', erpAppId, 'public', 'data', 'hotpot_cost_rules', 'rules');
-       await setDoc(rulesRef, { globalSettings: newSettings }, { merge: true });
-       setGlobalSettings(newSettings); 
-       setIsEditingUI(false);
-    } catch(e) {
-       console.error("UI Text Save Error:", e);
-       alert("儲存失敗");
-    }
+    setGlobalSettings(newSettings);
+    setIsEditingUI(false);
   };
 
   const handleRuleChange = (productName, field, value) => {
@@ -527,6 +490,72 @@ export default function App() {
     );
   };
 
+  const renderToast = () => {
+    if (!notice) return null;
+    const ok = notice.type === 'success';
+    return (
+      <div className={`fixed bottom-28 md:bottom-8 right-4 md:right-8 z-[120] max-w-sm p-4 rounded-2xl flex items-center text-sm font-bold shadow-[0_10px_30px_rgba(0,0,0,0.12)] border ${ok ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-500 border-red-200'}`}>
+        {ok ? <CheckCircle className="w-4 h-4 mr-2 shrink-0" /> : <AlertCircle className="w-4 h-4 mr-2 shrink-0" />}
+        <span>{notice.text}</span>
+      </div>
+    );
+  };
+
+  const renderIngredientEditor = () => {
+    if (!editingIngredient) return null;
+    const f = editingIngredient;
+    const setField = (key, value) => setEditingIngredient({ ...f, [key]: value });
+    const inputCls = 'w-full bg-[#F5F5F5] border-transparent rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all';
+    const labelCls = 'block text-xs font-bold text-[#7F7F7F] mb-2 tracking-widest uppercase';
+    const categoryOptions = Array.from(new Set(rawErpData.map(i => i.category)));
+    const vendorOptions = Array.from(new Set(rawErpData.map(i => i.vendor)));
+    const unitOptions = ['kg', 'g', '台斤', '斤', '包', '箱', '盒', '瓶', '個', '片', '份', '件', 'L', 'ml'];
+
+    return (
+      <div className="fixed inset-0 z-[110] bg-black/40 flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setEditingIngredient(null)}>
+        <div className="bg-white rounded-[32px] w-full max-w-lg max-h-[90vh] overflow-y-auto p-8 shadow-[0_20px_60px_rgba(0,0,0,0.2)]" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-2xl font-black text-black tracking-tight">{f.uid ? '編輯食材' : '新增食材'}</h3>
+            <button onClick={() => setEditingIngredient(null)} className="w-10 h-10 flex items-center justify-center bg-[#F5F5F5] rounded-full text-black hover:bg-neutral-200 transition-colors"><X size={18} /></button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            <div className="sm:col-span-2">
+              <label className={labelCls}>食材名稱</label>
+              <input type="text" value={f.name} onChange={(e) => setField('name', e.target.value)} className={inputCls} placeholder="例如：無骨雞腿肉" autoFocus />
+            </div>
+            <div>
+              <label className={labelCls}>代號（選填）</label>
+              <input type="text" value={f.code || ''} onChange={(e) => setField('code', e.target.value.toUpperCase())} className={inputCls} placeholder="例如：M001" />
+            </div>
+            <div>
+              <label className={labelCls}>分類</label>
+              <input type="text" list="ingredient-category-list" value={f.category} onChange={(e) => setField('category', e.target.value)} className={inputCls} placeholder="例如：肉類" />
+              <datalist id="ingredient-category-list">{categoryOptions.map(c => <option key={c} value={c} />)}</datalist>
+            </div>
+            <div className="sm:col-span-2">
+              <label className={labelCls}>廠商</label>
+              <input type="text" list="ingredient-vendor-list" value={f.vendor} onChange={(e) => setField('vendor', e.target.value)} className={inputCls} placeholder="例如：美福頂級肉品" />
+              <datalist id="ingredient-vendor-list">{vendorOptions.map(v => <option key={v} value={v} />)}</datalist>
+            </div>
+            <div>
+              <label className={labelCls}>進貨單價 ($)</label>
+              <input type="number" min="0" step="0.01" value={f.rawPrice} onChange={(e) => setField('rawPrice', e.target.value)} className={inputCls} placeholder="0" />
+            </div>
+            <div>
+              <label className={labelCls}>進貨單位</label>
+              <input type="text" list="ingredient-unit-list" value={f.unit} onChange={(e) => setField('unit', e.target.value)} className={inputCls} placeholder="例如：kg" />
+              <datalist id="ingredient-unit-list">{unitOptions.map(u => <option key={u} value={u} />)}</datalist>
+            </div>
+          </div>
+          <div className="flex gap-3 mt-8">
+            <button onClick={() => setEditingIngredient(null)} className="flex-1 bg-[#F5F5F5] hover:bg-neutral-200 text-black py-3.5 rounded-full font-bold text-sm transition-all">取消</button>
+            <button onClick={handleSaveIngredient} className="flex-1 bg-black hover:bg-neutral-800 text-white py-3.5 rounded-full font-bold text-sm transition-all">儲存</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-white flex flex-col items-center justify-center p-6 font-sans selection:bg-neutral-200 relative overflow-hidden">
@@ -607,10 +636,10 @@ export default function App() {
             <p className="text-[#7F7F7F] font-medium text-sm mt-2 tracking-wide">設定全域稅率、顯示名稱與各項食材規則。</p>
           </div>
           <button 
-            onClick={saveSettingsToCloud} disabled={isSyncing}
+            onClick={saveSettings}
             className="w-full sm:w-auto bg-black hover:bg-neutral-800 text-white px-8 py-3.5 rounded-full font-bold text-sm flex items-center justify-center gap-2 transition-all disabled:bg-neutral-200 disabled:text-neutral-400 shadow-[0_10px_20px_rgba(0,0,0,0.08)]"
           >
-            <Save size={18} /> {isSyncing ? '儲存中...' : '儲存變更'}
+            <Save size={18} /> 儲存變更
           </button>
         </div>
 
@@ -643,6 +672,20 @@ export default function App() {
                    />
                  </div>
               </div>
+           </div>
+        </div>
+
+        <div className="bg-white p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 mb-8">
+           <h3 className="font-black text-lg text-black mb-3 flex items-center gap-3">
+             <div className="p-2 bg-[#F5F5F5] rounded-full"><Database size={20} className="text-black"/></div>
+             資料備份與還原
+           </h3>
+           <p className="text-[#7F7F7F] font-medium text-sm mb-6 leading-relaxed">所有資料都儲存在這個瀏覽器中。清除瀏覽器資料或更換裝置前，請先匯出備份檔。</p>
+           <div className="flex flex-wrap gap-3">
+             <button onClick={handleExport} className="flex items-center gap-2 bg-black hover:bg-neutral-800 text-white px-6 py-3 rounded-full font-bold text-sm transition-all"><Download size={16} /> 匯出備份</button>
+             <button onClick={() => fileInputRef.current && fileInputRef.current.click()} className="flex items-center gap-2 bg-[#F5F5F5] hover:bg-neutral-200 text-black px-6 py-3 rounded-full font-bold text-sm transition-all"><Upload size={16} /> 匯入備份</button>
+             <button onClick={handleResetAll} className="flex items-center gap-2 bg-[#F5F5F5] hover:bg-red-50 text-red-500 px-6 py-3 rounded-full font-bold text-sm transition-all"><RotateCcw size={16} /> 還原為預設資料</button>
+             <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={handleImport} className="hidden" />
            </div>
         </div>
 
@@ -1296,7 +1339,7 @@ export default function App() {
             </div>
             {ingredientPricingData.length === 0 && (
               <div className="text-center py-16 text-[#7F7F7F] font-medium">
-                尚無食材資料，請先同步資料庫或新增食材。
+                尚無食材資料，請先到「食材成本」新增食材。
               </div>
             )}
           </div>
@@ -1306,6 +1349,10 @@ export default function App() {
   };
 
   const renderIngredientsTab = () => {
+    // 以名稱重新取得最新資料，避免編輯後畫面仍是舊資料
+    const currentCategory = selectedCategory ? erpData.find(c => c.category === selectedCategory.category) : null;
+    const currentVendor = currentCategory && selectedVendor ? currentCategory.vendors.find(v => v.vendorName === selectedVendor.vendorName) : null;
+
     if (searchQuery.trim() !== '') {
       return (
         <div className="pb-24 md:pb-8">
@@ -1314,7 +1361,7 @@ export default function App() {
           </h2>
           {searchResults.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {searchResults.map(item => <IngredientCard key={item.id} item={item} categoryName={item.categoryName} vendorName={item.vendorName} />)}
+              {searchResults.map(item => <IngredientCard key={item.id + item.uid} item={item} categoryName={item.categoryName} vendorName={item.vendorName} onEdit={openEditIngredient} onDelete={handleDeleteIngredient} />)}
             </div>
           ) : (
             <div className="text-center py-24 bg-white rounded-[32px] border border-neutral-100">
@@ -1326,32 +1373,37 @@ export default function App() {
       );
     }
 
-    if (selectedVendor) {
+    if (selectedVendor && currentVendor && currentCategory) {
       return (
         <div className="animate-in fade-in slide-in-from-right-4 duration-300 pb-24 md:pb-8">
           <div className="flex items-center gap-3 mb-8 text-xs font-bold uppercase tracking-widest">
             <button onClick={() => { setSelectedVendor(null); setSelectedCategory(null); }} className="text-[#7F7F7F] hover:text-black transition-colors">分類總覽</button>
             <span className="text-neutral-300">/</span>
-            <button onClick={() => setSelectedVendor(null)} className="text-[#7F7F7F] hover:text-black transition-colors">{selectedCategory.category}</button>
+            <button onClick={() => setSelectedVendor(null)} className="text-[#7F7F7F] hover:text-black transition-colors">{currentCategory.category}</button>
             <span className="text-neutral-300">/</span>
-            <span className="text-black">{selectedVendor.vendorName}</span>
+            <span className="text-black">{currentVendor.vendorName}</span>
           </div>
           
-          <div className="flex items-center mb-10 bg-white p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100">
-            <div className="w-16 h-16 bg-[#F5F5F5] rounded-full flex items-center justify-center mr-6"><Store className="w-6 h-6 text-black" strokeWidth={1.5} /></div>
-            <div>
-              <h2 className="text-3xl font-black text-black tracking-tight">{selectedVendor.vendorName}</h2>
-              <p className="text-sm font-bold text-[#7F7F7F] mt-1">提供 {selectedVendor.items.length} 項供應食材</p>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-10 bg-white p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100">
+            <div className="flex items-center">
+              <div className="w-16 h-16 bg-[#F5F5F5] rounded-full flex items-center justify-center mr-6 shrink-0"><Store className="w-6 h-6 text-black" strokeWidth={1.5} /></div>
+              <div>
+                <h2 className="text-3xl font-black text-black tracking-tight">{currentVendor.vendorName}</h2>
+                <p className="text-sm font-bold text-[#7F7F7F] mt-1">提供 {currentVendor.items.length} 項供應食材</p>
+              </div>
             </div>
+            <button onClick={() => openNewIngredient({ category: currentCategory.category, vendor: currentVendor.vendorName })} className="bg-black hover:bg-neutral-800 text-white px-6 py-3.5 rounded-full font-bold text-sm flex items-center justify-center gap-2 shadow-[0_10px_20px_rgba(0,0,0,0.1)] transition-all shrink-0">
+              <Plus size={16} strokeWidth={3} /> 新增食材
+            </button>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {selectedVendor.items.map(item => <IngredientCard key={item.id} item={item} />)}
+            {currentVendor.items.map(item => <IngredientCard key={item.id + item.uid} item={item} onEdit={openEditIngredient} onDelete={handleDeleteIngredient} />)}
           </div>
         </div>
       );
     }
 
-    if (selectedCategory) {
+    if (selectedCategory && currentCategory) {
       return (
         <div className="animate-in fade-in slide-in-from-right-4 duration-300 pb-24 md:pb-8">
           <button onClick={() => setSelectedCategory(null)} className="flex items-center text-[#7F7F7F] hover:text-black font-bold mb-8 transition-all w-fit">
@@ -1361,23 +1413,23 @@ export default function App() {
           
           <div className="flex items-center mb-10">
             <div className={`w-20 h-20 rounded-full flex items-center justify-center bg-white shadow-[0_10px_30px_rgba(0,0,0,0.05)] border border-neutral-100 mr-6`}>
-              {getIconByCategory(selectedCategory.category)}
+              {getIconByCategory(currentCategory.category)}
             </div>
             <div>
-              <h2 className="text-3xl font-black text-black tracking-tight">{selectedCategory.category}</h2>
+              <h2 className="text-3xl font-black text-black tracking-tight">{currentCategory.category}</h2>
               <p className="text-sm font-bold text-[#7F7F7F] mt-1 uppercase tracking-widest">請選擇進貨廠商</p>
             </div>
           </div>
           
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-            {selectedCategory.vendors.map((vendor, idx) => (
+            {currentCategory.vendors.map((vendor, idx) => (
               <button 
                 key={idx} onClick={() => setSelectedVendor(vendor)}
                 className="bg-white p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 hover:shadow-[0_20px_40px_rgba(0,0,0,0.06)] hover:border-black transition-all group text-left flex flex-col justify-between"
               >
                 <div className="flex items-start justify-between mb-8">
                   <div className="w-12 h-12 bg-[#F5F5F5] rounded-full flex items-center justify-center group-hover:bg-black transition-colors"><Store className="w-5 h-5 text-black group-hover:text-white" strokeWidth={1.5} /></div>
-                  <div className="bg-[#F5F5F5] text-[#7F7F7F] text-[10px] font-bold px-3 py-1.5 rounded-full uppercase tracking-widest">{selectedCategory.category}</div>
+                  <div className="bg-[#F5F5F5] text-[#7F7F7F] text-[10px] font-bold px-3 py-1.5 rounded-full uppercase tracking-widest">{currentCategory.category}</div>
                 </div>
                 <div>
                   <h3 className="text-2xl font-black text-black mb-2 tracking-tight">{vendor.vendorName}</h3>
@@ -1394,14 +1446,19 @@ export default function App() {
 
     return (
       <div className="animate-in fade-in duration-500 pb-24 md:pb-8">
-        <div className="mb-10">
-          <h2 className="text-3xl font-black text-black tracking-tight">{texts.tabIngredients}</h2>
-          <p className="text-[#7F7F7F] font-medium text-sm mt-2 tracking-wide">請選擇食材分類以檢視廠商報價。</p>
+        <div className="mb-10 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+          <div>
+            <h2 className="text-3xl font-black text-black tracking-tight">{texts.tabIngredients}</h2>
+            <p className="text-[#7F7F7F] font-medium text-sm mt-2 tracking-wide">請選擇食材分類以檢視廠商報價。</p>
+          </div>
+          <button onClick={() => openNewIngredient()} className="bg-black hover:bg-neutral-800 text-white px-6 py-3.5 rounded-full font-bold text-sm flex items-center justify-center gap-2 shadow-[0_10px_20px_rgba(0,0,0,0.1)] transition-all shrink-0">
+            <Plus size={16} strokeWidth={3} /> 新增食材
+          </button>
         </div>
         
         {erpData.length === 0 ? (
           <div className="col-span-full text-center py-20 text-[#7F7F7F] font-bold border-2 border-dashed border-neutral-200 rounded-[2rem] bg-white">
-            目前沒有從進貨系統讀取到任何食材。<br/>請確認進貨系統是否有建立單據。
+            目前尚未建立任何食材。<br/>請點擊右上角「新增食材」開始建立。
           </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
@@ -1460,31 +1517,6 @@ export default function App() {
         </nav>
         
         <div className="p-6 space-y-3">
-          {/* 一鍵儲存 */}
-          <button 
-            onClick={saveAllToCloud} disabled={isSyncing}
-            className={`w-full flex items-center justify-center gap-2.5 px-5 py-3 rounded-2xl font-bold transition-all bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm
-              ${isSyncing ? 'opacity-70 cursor-wait' : 'active:scale-[0.97]'}`}
-          >
-            <Save className="w-4 h-4" />
-            <span className="text-sm">儲存所有設定</span>
-          </button>
-          {/* 同步按鈕 */}
-          <button 
-            onClick={() => handleSync(false)} disabled={isSyncing}
-            className={`w-full flex items-center justify-center gap-2.5 px-5 py-3 rounded-2xl font-bold transition-all bg-black text-white hover:bg-neutral-800 shadow-sm
-              ${isSyncing ? 'opacity-70 cursor-wait' : 'active:scale-[0.97]'}`}
-          >
-            <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span className="text-sm">{isSyncing ? '同步中...' : '同步資料庫'}</span>
-          </button>
-          {syncMessage && (
-            <div className={`p-3 rounded-xl flex items-center text-xs font-bold
-              ${syncMessage.type === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-red-50 text-red-500 border border-red-200'}`}>
-              {syncMessage.type === 'success' ? <CheckCircle className="w-4 h-4 mr-2 shrink-0" /> : <AlertCircle className="w-4 h-4 mr-2 shrink-0" />}
-              <span className="truncate">{syncMessage.text}</span>
-            </div>
-          )}
           {/* 狀態卡 */}
           <div className="bg-[#F5F5F5] p-4 rounded-2xl">
              <div className="flex items-center gap-2 text-xs font-black text-black">
@@ -1506,9 +1538,6 @@ export default function App() {
                   <h1 className="text-lg font-black text-black tracking-tighter uppercase truncate max-w-[150px]">{globalSettings.systemName || 'FINERP'}</h1>
                   <span className="text-[8px] text-neutral-400 font-bold block -mt-0.5 leading-none uppercase">介面文字設定</span>
                 </div>
-              </button>
-              <button onClick={() => handleSync(false)} disabled={isSyncing} className={`w-10 h-10 flex items-center justify-center rounded-full bg-[#F5F5F5] text-black ${isSyncing ? 'animate-spin' : ''}`}>
-                <RefreshCw size={16} />
               </button>
             </div>
 
@@ -1553,12 +1582,14 @@ export default function App() {
       </nav>
 
       {renderUIEditor()}
+      {renderIngredientEditor()}
+      {renderToast()}
 
     </div>
   );
 }
 
-function IngredientCard({ item, categoryName, vendorName }) {
+function IngredientCard({ item, categoryName, vendorName, onEdit, onDelete }) {
   const hasConversion = item.recipeConversion > 1 && item.recipeUnit !== item.unit;
   return (
     <div className="bg-white rounded-3xl border border-neutral-100 shadow-[0_4px_24px_rgba(0,0,0,0.04)] hover:shadow-[0_8px_32px_rgba(0,0,0,0.08)] hover:border-black transition-all overflow-hidden flex flex-col group">
@@ -1569,7 +1600,15 @@ function IngredientCard({ item, categoryName, vendorName }) {
           {categoryName && <span className="text-[10px] font-bold text-[#9CA3AF] bg-[#F5F5F5] px-2.5 py-1 rounded-lg">{categoryName}</span>}
           {vendorName && <span className="text-[10px] font-bold text-[#9CA3AF] bg-[#F5F5F5] px-2.5 py-1 rounded-lg">{vendorName}</span>}
         </div>
-        <h3 className="text-xl font-black text-black tracking-tight truncate">{item.name}</h3>
+        <div className="flex items-start justify-between gap-2">
+          <h3 className="text-xl font-black text-black tracking-tight truncate">{item.name}</h3>
+          {item.uid && (onEdit || onDelete) && (
+            <div className="flex gap-1 shrink-0 -mt-1 -mr-2">
+              {onEdit && <button onClick={() => onEdit(item.uid)} className="p-2 text-neutral-300 hover:text-black hover:bg-[#F5F5F5] rounded-xl transition-colors" title="編輯"><Edit2 size={15} /></button>}
+              {onDelete && <button onClick={() => onDelete(item.uid)} className="p-2 text-neutral-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors" title="刪除"><Trash2 size={15} /></button>}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* 進貨單價 */}
