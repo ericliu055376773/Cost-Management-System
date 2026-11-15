@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, Lock, ChevronLeft, Package, Calculator, DollarSign, Beef, Carrot, Fish, Coffee, CheckCircle, AlertCircle, Utensils, Plus, Trash2, Edit2, Layers, ChevronRight, Store, Settings, Save, Scale, Receipt, FolderPlus, Tag, Type, Download, Upload, RotateCcw, X, Database, CalendarDays } from 'lucide-react';
+import { Search, Lock, ChevronLeft, Package, Calculator, DollarSign, Beef, Carrot, Fish, Coffee, CheckCircle, AlertCircle, Utensils, Plus, Trash2, Edit2, Pencil, Check, Layers, ChevronRight, Store, Settings, Save, Scale, Receipt, FolderPlus, Tag, Type, Download, Upload, RotateCcw, X, Database, CalendarDays } from 'lucide-react';
 
 // ==========================================
 // 本機資料儲存（獨立版，不再連接任何雲端或進貨系統）
@@ -151,6 +151,7 @@ export default function App() {
   const [costCalcs, setCostCalcs] = useState(() => Array.isArray(initialSaved?.costCalcs) ? initialSaved.costCalcs : []);
   const [costPickId, setCostPickId] = useState(null);
   const [addingItem, setAddingItem] = useState(null);
+  const [editingCat, setEditingCat] = useState(null); // { name, value }
   const [costCategories, setCostCategories] = useState(() => Array.isArray(initialSaved?.costCategories) ? initialSaved.costCategories : migrateRecipeCategories(initialSaved?.setMenus));
   const [openCategoryId, setOpenCategoryId] = useState(null);
   const [showNewCategory, setShowNewCategory] = useState(false);
@@ -306,6 +307,12 @@ export default function App() {
   // ==========================================
   // 本機儲存、提示訊息
   // ==========================================
+  // 防呆確認視窗：刪除前一律先跳出，預設焦點在「取消」
+  const [confirmDlg, setConfirmDlg] = useState(null);
+  const [confirmInput, setConfirmInput] = useState('');
+  const askConfirm = (opts) => { setConfirmInput(''); setConfirmDlg(opts); };
+  const closeConfirm = () => setConfirmDlg(null);
+
   const showNotice = (type, text) => {
     setNotice({ type, text });
     setTimeout(() => setNotice(null), 4000);
@@ -359,7 +366,7 @@ export default function App() {
       try {
         const data = JSON.parse(reader.result);
         if (!data || !Array.isArray(data.rawErpData)) throw new Error('格式不符');
-        if (!window.confirm('匯入會覆蓋目前所有資料，確定要繼續嗎？')) return;
+        askConfirm({ title: '匯入並覆蓋資料？', message: '匯入會覆蓋目前所有資料。', confirmText: '確定匯入', onConfirm: () => {
         setRawErpData(withUids(data.rawErpData));
         setProductRules(data.productRules || {});
         setGlobalSettings({
@@ -377,6 +384,7 @@ export default function App() {
         setOpenCategoryId(null);
         setCostPickId(null);
         showNotice('success', '備份匯入成功！');
+        } });
       } catch (err) {
         console.error(err);
         showNotice('error', '匯入失敗：檔案格式不正確。');
@@ -385,8 +393,8 @@ export default function App() {
     reader.readAsText(file);
   };
 
-  const handleResetAll = () => {
-    if (!window.confirm('這會清除所有食材、規則、商品配方、門店與售價紀錄，確定嗎？（建議先匯出備份）')) return;
+  const handleResetAll = () => askConfirm({ title: '清空所有資料？', message: '這會清除所有食材、規則、商品配方、門店與售價紀錄。\n建議先匯出備份。', requireText: '刪除', confirmText: '清空全部', onConfirm: doResetAll });
+  const doResetAll = () => {
     setRawErpData(withUids(initialRawData));
     setProductRules(defaultRules);
     setGlobalSettings(defaultGlobalSettings);
@@ -496,6 +504,34 @@ export default function App() {
                {renderInputField("狀態欄提示字", "statusText")}
              </div>
           </section>
+        </div>
+      </div>
+    );
+  };
+
+  const renderConfirmDialog = () => {
+    if (!confirmDlg) return null;
+    const need = confirmDlg.requireText || '';
+    const canGo = !need || confirmInput.trim() === need;
+    return (
+      <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/50" onClick={closeConfirm} onKeyDown={(e) => { if (e.key === 'Escape') closeConfirm(); }}>
+        <div role="alertdialog" aria-modal="true" className="w-full max-w-sm bg-white rounded-[24px] p-6 border border-[#B4B4BE] shadow-[0_20px_60px_rgba(0,0,0,0.35)]" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-10 h-10 rounded-full bg-red-50 text-red-500 flex items-center justify-center shrink-0"><AlertCircle size={20} /></div>
+            <h3 className="text-lg font-black text-black">{confirmDlg.title || '確定要刪除嗎？'}</h3>
+          </div>
+          <p className="text-sm font-medium text-[#5F5F68] whitespace-pre-line leading-relaxed mb-2">{confirmDlg.message}</p>
+          <p className="text-xs font-bold text-red-500 mb-4">此動作無法復原。</p>
+          {need && (
+            <div className="mb-4">
+              <label className="block text-xs font-bold text-[#5F5F68] mb-2">請輸入「{need}」以確認</label>
+              <input value={confirmInput} onChange={(e) => setConfirmInput(e.target.value)} className="w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold" />
+            </div>
+          )}
+          <div className="flex justify-end gap-3">
+            <button autoFocus onClick={closeConfirm} className="px-5 py-2.5 rounded-full bg-[#F5F5F5] hover:bg-neutral-200 text-black font-bold text-sm transition-colors">取消</button>
+            <button disabled={!canGo} onClick={() => { const fn = confirmDlg.onConfirm; closeConfirm(); if (fn) fn(); }} className="px-5 py-2.5 rounded-full bg-red-500 hover:bg-red-600 text-white font-bold text-sm transition-colors disabled:opacity-30 disabled:cursor-not-allowed">{confirmDlg.confirmText || '確定刪除'}</button>
+          </div>
         </div>
       </div>
     );
@@ -817,14 +853,24 @@ export default function App() {
     };
 
     const handleDeleteCategory = (cat) => {
-      if (!window.confirm(`確定要刪除分類「${cat.name}」嗎？\n其中 ${(cat.items || []).length} 項單品也會一併刪除。`)) return;
-      setCostCategories(prev => prev.filter(c => c.id !== cat.id));
-      if (openCategoryId === cat.id) { setOpenCategoryId(null); setAddingItem(null); }
+      askConfirm({ title: `刪除分類「${cat.name}」？`, message: `其中 ${(cat.items || []).length} 項單品也會一併刪除。`, onConfirm: () => {
+        setCostCategories(prev => prev.filter(c => c.id !== cat.id));
+        if (openCategoryId === cat.id) { setOpenCategoryId(null); setAddingItem(null); }
+      } });
     };
 
     // ---------- 分類詳細頁 ----------
     const openCat = costCategories.find(c => c.id === openCategoryId);
     if (openCat) {
+      const catOf = (x) => (x && (x.menuCategory || x.category)) || '未分類';
+      const addCategories = Array.from(new Set(setMenus.map(catOf)));
+      const addMenus = addingItem && addingItem.category ? setMenus.filter(m => catOf(m) === addingItem.category) : [];
+      const addMenu = addingItem ? setMenus.find(m => m.id === addingItem.menuId) : null;
+      // 與該商品對應的食材成本（依每月售價紀錄或名稱＋分類比對），月份新的排前面
+      const addCalcs = addMenu ? costCalcs.filter(c => {
+        const rec = monthlyPrices.find(r => r.id === c.recordId);
+        return rec ? rec.menuId === addMenu.id : (c.menuName === addMenu.name && catOf(c) === catOf(addMenu));
+      }).sort((a, b) => b.month.localeCompare(a.month)) : [];
       const calcForAdd = addingItem ? costCalcs.find(c => c.id === addingItem.calcId) : null;
       const addUnitCost = calcForAdd ? calcCost(calcForAdd.price, calcForAdd.weight, calcForAdd.yieldRate, calcForAdd.taxRate) : null;
       const addWeight = addingItem ? parseFloat(addingItem.weight) : NaN;
@@ -836,7 +882,10 @@ export default function App() {
         setAddingItem(null);
       };
       const handleQty = (itemId, value) => updateCategory(openCat.id, { items: openCat.items.map(i => i.id === itemId ? { ...i, qty: value === '' ? '' : (parseFloat(value) || 0) } : i) });
-      const handleRemoveItem = (itemId) => updateCategory(openCat.id, { items: openCat.items.filter(i => i.id !== itemId) });
+      const handleRemoveItem = (itemId) => {
+      const it = openCat.items.find(i => i.id === itemId);
+      askConfirm({ title: `刪除單品「${it ? it.itemName : ''}」？`, message: '會從此分類移除這個單品。', onConfirm: () => updateCategory(openCat.id, { items: openCat.items.filter(i => i.id !== itemId) }) });
+    };
 
       const fieldCls = 'w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all h-[52px]';
       const labelCls = 'block text-xs font-bold text-[#5F5F68] mb-2 tracking-widest uppercase';
@@ -868,7 +917,7 @@ export default function App() {
 
           <div className="flex items-center justify-between mb-5">
             <h3 className="font-black text-black text-xl tracking-tight">單品 <span className="text-[#5F5F68] text-sm font-bold ml-2">共 {openCat.items.length} 項</span></h3>
-            <button onClick={() => setAddingItem(addingItem ? null : { calcId: '', weight: '' })} className="flex items-center gap-2 bg-black hover:bg-neutral-800 text-white px-5 py-3 rounded-full font-bold text-sm shadow-[0_10px_20px_rgba(0,0,0,0.1)] transition-all whitespace-nowrap">
+            <button onClick={() => setAddingItem(addingItem ? null : { category: '', menuId: '', calcId: '', weight: '' })} className="flex items-center gap-2 bg-black hover:bg-neutral-800 text-white px-5 py-3 rounded-full font-bold text-sm shadow-[0_10px_20px_rgba(0,0,0,0.1)] transition-all whitespace-nowrap">
               <Plus size={14} strokeWidth={3} /> 新增單品
             </button>
           </div>
@@ -879,33 +928,58 @@ export default function App() {
                 <h4 className="font-black text-black text-lg">新增單品</h4>
                 <button onClick={() => setAddingItem(null)} aria-label="關閉" className="w-8 h-8 flex items-center justify-center bg-[#F5F5F5] rounded-full text-black hover:bg-neutral-200 transition-colors"><X size={14} /></button>
               </div>
-              {costCalcs.length === 0 ? (
+              {addCategories.length === 0 ? (
                 <div className="text-center py-6 bg-[#F5F5F5] rounded-[16px]">
-                  <p className="text-[#5F5F68] font-bold text-sm mb-3">「{texts.tabIngredients}」還沒有儲存任何項目。</p>
-                  <button onClick={() => { setAddingItem(null); setCurrentTab('ingredients'); }} className="bg-black hover:bg-neutral-800 text-white px-5 py-2.5 rounded-full font-bold text-sm transition-all">前往「{texts.tabIngredients}」試算</button>
+                  <p className="text-red-600 font-bold text-sm mb-3">「{texts.tabMonthlyPrice || '每月售價'}」還沒有任何商品。</p>
+                  <button onClick={() => { setAddingItem(null); setCurrentTab('monthlyPrice'); }} className="bg-black hover:bg-neutral-800 text-white px-5 py-2.5 rounded-full font-bold text-sm transition-all">前往「{texts.tabMonthlyPrice || '每月售價'}」登錄</button>
                 </div>
               ) : (
                 <>
-                  <div className="grid grid-cols-1 md:grid-cols-[2fr_1fr] gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label className={labelCls}>單品（來自{texts.tabIngredients}）</label>
-                      <select value={addingItem.calcId} onChange={(e) => setAddingItem({ ...addingItem, calcId: e.target.value })} className={fieldCls} aria-label="選擇單品">
-                        <option value="" disabled>選擇單品...</option>
-                        {sortedCalcs.map(c => {
-                          const cc = calcCost(c.price, c.weight, c.yieldRate, c.taxRate);
-                          return <option key={c.id} value={c.id}>{c.menuName}（{c.storeName}・{c.month}）{cc === null ? '' : ` $${fmtUnitCost(cc)}/${c.weightUnit}`}</option>;
-                        })}
+                      <label className={labelCls}>1. 分類（來自{texts.tabMonthlyPrice || '每月售價'}）</label>
+                      <select value={addingItem.category} onChange={(e) => setAddingItem({ category: e.target.value, menuId: '', calcId: '', weight: '' })} className={fieldCls} aria-label="選擇分類">
+                        <option value="" disabled>選擇分類...</option>
+                        {addCategories.map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
                     <div>
-                      <label className={labelCls}>重量{calcForAdd && <span className="normal-case">（{calcForAdd.weightUnit}）</span>}</label>
+                      <label className={labelCls}>2. 商品（來自{texts.tabMonthlyPrice || '每月售價'}）</label>
+                      <select value={addingItem.menuId} disabled={!addingItem.category} onChange={(e) => {
+                        const m = setMenus.find(x => x.id === e.target.value);
+                        const list = costCalcs.filter(c => { const rec = monthlyPrices.find(r => r.id === c.recordId); return rec ? rec.menuId === m.id : (c.menuName === m.name && catOf(c) === catOf(m)); }).sort((a, b) => b.month.localeCompare(a.month));
+                        setAddingItem({ ...addingItem, menuId: e.target.value, calcId: list[0] ? list[0].id : '', weight: '' });
+                      }} className={`${fieldCls} disabled:opacity-40 disabled:cursor-not-allowed`} aria-label="選擇商品">
+                        <option value="" disabled>選擇商品...</option>
+                        {addMenus.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                      </select>
+                    </div>
+                    {addMenu && addCalcs.length > 1 && (
+                      <div>
+                        <label className={labelCls}>成本來源（門店・月份）</label>
+                        <select value={addingItem.calcId} onChange={(e) => setAddingItem({ ...addingItem, calcId: e.target.value })} className={fieldCls} aria-label="成本來源">
+                          {addCalcs.map(c => {
+                            const cc = calcCost(c.price, c.weight, c.yieldRate, c.taxRate);
+                            return <option key={c.id} value={c.id}>{c.storeName}・{c.month}{cc === null ? '' : ` $${fmtUnitCost(cc)}/${c.weightUnit}`}</option>;
+                          })}
+                        </select>
+                      </div>
+                    )}
+                    <div>
+                      <label className={labelCls}>3. 重量{calcForAdd && <span className="normal-case">（{calcForAdd.weightUnit}）</span>}</label>
                       <input type="number" min="0" step="any" value={addingItem.weight} disabled={!calcForAdd} onChange={(e) => setAddingItem({ ...addingItem, weight: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') handleAddItem(); }} placeholder="例如 100" className={`${fieldCls} disabled:opacity-40 disabled:cursor-not-allowed`} aria-label="重量" />
                     </div>
                   </div>
+                  {addMenu && addCalcs.length === 0 && (
+                    <div className="mt-4 bg-white border border-[#B4B4BE] rounded-[16px] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <p className="text-sm font-bold text-red-600">「{addMenu.name}」還沒有在「{texts.tabIngredients}」試算成本，請先試算後再加入。</p>
+                      <button onClick={() => { setAddingItem(null); setCurrentTab('ingredients'); }} className="bg-black hover:bg-neutral-800 text-white px-5 py-2.5 rounded-full font-bold text-sm transition-all shrink-0">前往「{texts.tabIngredients}」</button>
+                    </div>
+                  )}
                   <div className="mt-4 bg-[#111111] rounded-[16px] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="min-w-0">
                       <span className="block text-[10px] text-neutral-500 font-bold uppercase tracking-widest mb-1">計算式　單品 × 重量</span>
-                      <p className="text-sm font-bold text-neutral-300 break-words">{addLineCost === null ? '請選擇單品並輸入重量。' : `$${fmtUnitCost(addUnitCost)}/${calcForAdd.weightUnit} × ${addWeight}${calcForAdd.weightUnit}`}</p>
+                      <p className={`text-sm font-bold break-words ${addLineCost === null ? 'text-red-400' : 'text-neutral-300'}`}>{addLineCost === null ? '請選擇分類、商品並輸入重量。' : `$${fmtUnitCost(addUnitCost)}/${calcForAdd.weightUnit} × ${addWeight}${calcForAdd.weightUnit}`}</p>
                     </div>
                     <div className="sm:text-right shrink-0">
                       <span className="block text-[10px] text-neutral-500 font-bold uppercase tracking-widest mb-1">商品成本</span>
@@ -930,7 +1004,7 @@ export default function App() {
                   <div className="flex-1 min-w-0 flex items-center gap-4">
                     <div className="w-10 h-10 rounded-full bg-[#F5F5F5] flex items-center justify-center shrink-0"><Tag size={14} className="text-black" /></div>
                     <div className="min-w-0">
-                      <h4 className="font-black text-black text-base leading-none mb-1.5 truncate">{info.name}</h4>
+                      <h4 className="font-black text-black text-xl leading-none mb-1.5 truncate">{info.name}</h4>
                       <p className="text-[10px] text-[#5F5F68] font-bold tracking-wide">{info.store} • ${fmtUnitCost(info.unitCost)}/{info.unit}{info.missing ? '（來源已刪除，沿用原成本）' : ''}</p>
                     </div>
                   </div>
@@ -991,7 +1065,7 @@ export default function App() {
           <div className="text-center py-24 bg-[#F5F5F5] rounded-[32px]">
             <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm"><Layers size={24} className="text-black" /></div>
             <p className="text-black font-black text-xl mb-2 tracking-tight">尚未建立任何分類</p>
-            <p className="text-[#5F5F68] font-medium text-sm">點擊右上角「新增分類」開始建立。</p>
+            <p className="text-red-600 font-bold text-sm">點擊右上角「新增分類」開始建立。</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
@@ -1002,7 +1076,7 @@ export default function App() {
                   <h3 className="text-lg font-black text-black mb-1 tracking-tight truncate pr-10">{cat.name}</h3>
                   <p className="text-xs font-bold text-[#52525B] mb-5">{(cat.items || []).length} 項單品</p>
                   <div className="pt-4 border-t border-[#B4B4BE] flex items-center justify-between">
-                    <span className="text-xs font-bold text-[#52525B]">點擊查看商品成本</span>
+                    <span className="text-xs font-bold text-red-600">點擊查看商品成本</span>
                     <ChevronRight size={18} className="text-neutral-400 group-hover:text-black transition-colors" />
                   </div>
                 </button>
@@ -1037,19 +1111,48 @@ export default function App() {
       showNotice('success', `已新增門店「${name}」。`);
     };
 
+    const catCount = (name) => setMenus.filter(m => categoryOf(m) === name).length;
+    const handleRenameCategory = () => {
+      if (!editingCat) return;
+      const oldName = editingCat.name; const newName = editingCat.value.trim();
+      if (!newName) { showNotice('error', '請輸入分類名稱。'); return; }
+      if (newName === oldName) { setEditingCat(null); return; }
+      if (categoryOptions.includes(newName)) { showNotice('error', '已有同名分類。'); return; }
+      setSetMenus(prev => prev.map(m => categoryOf(m) === oldName ? { ...m, menuCategory: newName } : m));
+      setMonthlyPrices(prev => prev.map(r => (r.category || '未分類') === oldName ? { ...r, category: newName } : r));
+      setCostCalcs(prev => prev.map(c => (c.category || '未分類') === oldName ? { ...c, category: newName } : c));
+      if (mpForm.category === oldName) setMpForm({ ...mpForm, category: newName });
+      setEditingCat(null);
+      showNotice('success', `已將分類「${oldName}」改名為「${newName}」。`);
+    };
+    const handleDeleteCategory2 = (name) => {
+      const menuIds = setMenus.filter(m => categoryOf(m) === name).map(m => m.id);
+      const recCount = monthlyPrices.filter(r => menuIds.includes(r.menuId)).length;
+      askConfirm({ title: `刪除分類「${name}」？`, message: `該分類下 ${menuIds.length} 個商品與 ${recCount} 筆每月售價紀錄也會一併刪除。\n已儲存的食材成本與商品計算不受影響。`, onConfirm: () => {
+        setSetMenus(prev => prev.filter(m => categoryOf(m) !== name));
+        setMonthlyPrices(prev => prev.filter(r => !menuIds.includes(r.menuId)));
+        if (mpForm.category === name) setMpForm({ ...mpForm, category: '', menuId: '', price: '' });
+        setEditingCat(null);
+      } });
+    };
+
     const handleDeleteStore = (store) => {
       const count = monthlyPrices.filter(r => r.storeId === store.id).length;
-      if (!window.confirm(`確定要刪除門店「${store.name}」嗎？${count > 0 ? `\n該門店共 ${count} 筆每月售價紀錄也會一併刪除。` : ''}`)) return;
-      setStores(prev => prev.filter(st => st.id !== store.id));
-      setMonthlyPrices(prev => prev.filter(r => r.storeId !== store.id));
-      if (mpForm.storeId === store.id) setMpForm({ storeId: '', category: '', menuId: '', price: '' });
+      askConfirm({ title: `刪除門店「${store.name}」？`, message: count > 0 ? `該門店共 ${count} 筆每月售價紀錄也會一併刪除。` : '此門店沒有售價紀錄。', onConfirm: () => {
+        setStores(prev => prev.filter(st => st.id !== store.id));
+        setMonthlyPrices(prev => prev.filter(r => r.storeId !== store.id));
+        if (mpForm.storeId === store.id) setMpForm({ storeId: '', category: '', menuId: '', price: '' });
+      } });
     };
 
     const isNewCategory = mpForm.category === '__new__';
     const isNewMenu = isNewCategory || mpForm.menuId === '__new__';
     const resolvedCategory = isNewCategory ? (mpForm.newCategory || '').trim() : mpForm.category;
     const resolvedMenuName = isNewMenu ? (mpForm.newMenuName || '').trim() : '';
-    const canSave = !!mpForm.storeId && !!resolvedCategory && (isNewMenu ? !!resolvedMenuName : !!mpForm.menuId) && mpForm.price !== '';
+    const dupMenu = isNewMenu ? setMenus.find(m => categoryOf(m) === resolvedCategory && m.name === resolvedMenuName) : setMenus.find(m => m.id === mpForm.menuId);
+    const dupRecord = dupMenu && mpForm.storeId ? monthlyPrices.find(r => r.month === selectedMonth && r.storeId === mpForm.storeId && r.menuId === dupMenu.id) : null;
+    const dupMsg = dupRecord ? `「${dupMenu.name}」在 ${yy} 年 ${parseInt(mm, 10)} 月已登錄過，不可輸入相同的商品。如需修改請直接在下方紀錄調整售價。` : '';
+    const canSave = !!mpForm.storeId && !!resolvedCategory && (isNewMenu ? !!resolvedMenuName : !!mpForm.menuId) && mpForm.price !== '' && !dupRecord;
 
     const handleSavePrice = () => {
       const price = parseFloat(mpForm.price);
@@ -1058,6 +1161,7 @@ export default function App() {
       if (isNewMenu && !resolvedMenuName) { showNotice('error', '請輸入商品名稱。'); return; }
       if (!isNewMenu && !mpForm.menuId) { showNotice('error', '請選擇商品。'); return; }
       if (mpForm.price === '' || isNaN(price) || price < 0) { showNotice('error', '請輸入正確的售價。'); return; }
+      if (dupRecord) { showNotice('error', dupMsg); return; }
 
       // 取得商品；若是新商品就在這裡直接建立（同分類下同名則沿用既有商品，避免重複）
       let menu = isNewMenu ? setMenus.find(m => categoryOf(m) === resolvedCategory && m.name === resolvedMenuName) : setMenus.find(m => m.id === mpForm.menuId);
@@ -1086,8 +1190,7 @@ export default function App() {
       setMonthlyPrices(prev => prev.map(r => r.id === id && r.price === '' ? { ...r, price: 0 } : r));
     };
     const handleDeleteRecord = (rec, productName) => {
-      if (!window.confirm(`確定要刪除「${productName}」這筆售價紀錄嗎？`)) return;
-      setMonthlyPrices(prev => prev.filter(r => r.id !== rec.id));
+      askConfirm({ title: `刪除「${productName}」售價紀錄？`, message: '只會刪除這個月份的這筆售價。', onConfirm: () => setMonthlyPrices(prev => prev.filter(r => r.id !== rec.id)) });
     };
 
     const selectCls = 'w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed';
@@ -1124,7 +1227,7 @@ export default function App() {
                 <button onClick={() => handleDeleteStore(st)} aria-label={`刪除門店 ${st.name}`} className="w-7 h-7 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><X size={14} /></button>
               </span>
             ))}
-            {stores.length === 0 && <span className="text-[#5F5F68] font-bold text-sm py-2">尚未建立門店，請先新增第一間門店。</span>}
+            {stores.length === 0 && <span className="text-red-600 font-bold text-sm py-2">尚未建立門店，請先新增第一間門店。</span>}
           </div>
           <div className="flex gap-3 max-w-md">
             <input
@@ -1134,6 +1237,32 @@ export default function App() {
               className="flex-1 min-w-0 bg-white border border-[#B4B4BE] rounded-full px-5 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all text-sm"
             />
             <button onClick={handleAddStore} className="bg-black hover:bg-neutral-800 text-white px-5 py-3 rounded-full font-bold text-sm flex items-center gap-2 transition-all shrink-0"><Plus size={16} strokeWidth={3} /> 新增門店</button>
+          </div>
+        </div>
+
+        {/* 商品分類：可改名、刪除 */}
+        <div className="bg-[#DEDEE4] p-6 md:p-8 rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] mb-8">
+          <h3 className="font-black text-lg text-black mb-6 flex items-center gap-3">
+            <div className="p-2 bg-white rounded-full"><Tag size={20} className="text-black" /></div>
+            商品分類
+          </h3>
+          <div className="flex flex-wrap gap-3">
+            {categoryOptions.map(name => (
+              editingCat && editingCat.name === name ? (
+                <span key={name} className="inline-flex items-center gap-1 bg-white border-2 border-black pl-3 pr-1.5 py-1 rounded-full">
+                  <input autoFocus value={editingCat.value} onChange={(e) => setEditingCat({ ...editingCat, value: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') handleRenameCategory(); if (e.key === 'Escape') setEditingCat(null); }} aria-label="分類名稱" className="w-32 bg-transparent outline-none font-bold text-sm text-black" />
+                  <button onClick={handleRenameCategory} aria-label="儲存分類名稱" className="w-7 h-7 flex items-center justify-center rounded-full bg-black text-white hover:bg-neutral-800 transition-colors"><Check size={14} /></button>
+                  <button onClick={() => setEditingCat(null)} aria-label="取消編輯" className="w-7 h-7 flex items-center justify-center rounded-full text-neutral-500 hover:bg-neutral-100 transition-colors"><X size={14} /></button>
+                </span>
+              ) : (
+                <span key={name} className="inline-flex items-center gap-1 bg-white border border-[#B4B4BE] text-black font-bold text-sm pl-4 pr-1.5 py-1.5 rounded-full">
+                  {name}<span className="text-[11px] text-[#5F5F68] font-bold ml-1">{catCount(name)}</span>
+                  <button onClick={() => setEditingCat({ name, value: name })} aria-label={`編輯分類 ${name}`} className="w-7 h-7 flex items-center justify-center rounded-full text-neutral-400 hover:text-black hover:bg-neutral-100 transition-colors"><Pencil size={13} /></button>
+                  <button onClick={() => handleDeleteCategory2(name)} aria-label={`刪除分類 ${name}`} className="w-7 h-7 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><X size={14} /></button>
+                </span>
+              )
+            ))}
+            {categoryOptions.length === 0 && <span className="text-red-600 font-bold text-sm py-2">尚未建立分類，請在下方登錄售價時選擇「+ 新增分類...」。</span>}
           </div>
         </div>
 
@@ -1150,7 +1279,7 @@ export default function App() {
                 <option value="" disabled>選擇門店...</option>
                 {stores.map(st => <option key={st.id} value={st.id}>{st.name}</option>)}
               </select>
-              {stores.length === 0 && <p className="text-[11px] text-[#5F5F68] font-bold mt-2">請先在上方新增門店</p>}
+              {stores.length === 0 && <p className="text-[11px] text-red-600 font-bold mt-2">請先在上方新增門店</p>}
             </div>
             <div>
               <label className={labelCls}>2. 分類</label>
@@ -1197,12 +1326,17 @@ export default function App() {
               </button>
             </div>
           </div>
+          {dupRecord && (
+            <div role="alert" className="mt-5 flex items-start gap-2 bg-red-50 border border-red-300 text-red-600 rounded-[16px] px-4 py-3 text-sm font-bold">
+              <AlertCircle size={18} className="shrink-0 mt-0.5" /><span>{dupMsg}</span>
+            </div>
+          )}
         </div>
 
         {/* 當月紀錄 */}
         <h3 className="text-xl font-black text-black tracking-tight mb-5">{yy} 年 {parseInt(mm, 10)} 月售價紀錄 <span className="text-[#5F5F68] text-sm font-bold ml-2">共 {monthRecords.length} 筆</span></h3>
         {monthRecords.length === 0 ? (
-          <div className="text-center py-20 text-[#5F5F68] font-medium rounded-[32px] bg-[#F5F5F5]">這個月還沒有登錄任何售價。</div>
+          <div className="text-center py-20 text-red-600 font-bold rounded-[32px] bg-[#F5F5F5]">這個月還沒有登錄任何售價。</div>
         ) : (
           <div className="space-y-6">
             {stores.map(st => {
@@ -1231,7 +1365,7 @@ export default function App() {
                           return (
                             <tr key={r.id} className="border-b border-neutral-50 hover:bg-[#F9F9F9] transition-colors">
                               <td className="px-6 py-3"><span className="text-xs font-bold text-[#5F5F68] bg-[#F5F5F5] px-3 py-1 rounded-full">{live ? categoryOf(live) : r.category}</span></td>
-                              <td className="px-6 py-3 font-black text-black text-sm">{productName}</td>
+                              <td className="px-6 py-3 font-black text-black text-base tracking-tight">{productName}</td>
                               <td className="px-6 py-3 text-right">
                                 <span className="text-[#6B6B76] text-sm mr-0.5">$</span>
                                 <input
@@ -1348,7 +1482,7 @@ export default function App() {
                       <p className="text-xs text-[#6B6B76] font-bold mt-1">食材成本 <span className="text-black">${menu.totalIngredientsCost.toFixed(1)}</span></p>
                     </div>
                     <div className="flex gap-1 shrink-0">
-                      <button onClick={() => setSetMenus(prev => prev.filter(m => m.id !== menu.id))} className="p-2 text-neutral-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={15} /></button>
+                      <button onClick={() => askConfirm({ title: `刪除商品「${menu.name}」？`, message: '會從售價金額中移除這個商品。', onConfirm: () => setSetMenus(prev => prev.filter(m => m.id !== menu.id)) })} className="p-2 text-neutral-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={15} /></button>
                     </div>
                   </div>
 
@@ -1476,7 +1610,7 @@ export default function App() {
     };
 
     const handleSaveCalc = () => {
-      if (!picked || result === null) { showNotice('error', '請完整輸入售價、重量、耗損與營業稅。'); return; }
+      if (!picked || result === null) { showNotice('error', '請完整輸入售價、重量、可用重量與營業稅。'); return; }
       const entry = {
         id: savedForPicked ? savedForPicked.id : newUid(), recordId: picked.id,
         menuName: productNameOf(picked), category: picked.category, storeName: storeNameOf(picked.storeId), month: picked.month,
@@ -1487,8 +1621,7 @@ export default function App() {
     };
 
     const handleDeleteCalc = (c) => {
-      if (!window.confirm(`確定要刪除「${c.menuName}」的食材成本試算嗎？`)) return;
-      setCostCalcs(prev => prev.filter(x => x.id !== c.id));
+      askConfirm({ title: `刪除「${c.menuName}」食材成本？`, message: '已加入商品計算的單品會保留最後儲存的成本。', onConfirm: () => setCostCalcs(prev => prev.filter(x => x.id !== c.id)) });
     };
 
     const inputCls = 'w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all';
@@ -1521,17 +1654,18 @@ export default function App() {
 
     const handleDeleteUnit = (name) => {
       if (units.length <= 1) { showNotice('error', '至少要保留一個單位。'); return; }
-      if (!window.confirm(`確定要刪除單位「${name}」嗎？已儲存的食材成本不受影響。`)) return;
-      const rest = units.filter(u => u !== name);
-      setUnits(rest);
-      if (costForm.weightUnit === name) setCostForm({ ...costForm, weightUnit: rest[0] });
+      askConfirm({ title: `刪除單位「${name}」？`, message: '已儲存的食材成本不受影響。', onConfirm: () => {
+        const rest = units.filter(u => u !== name);
+        setUnits(rest);
+        if (costForm.weightUnit === name) setCostForm({ ...costForm, weightUnit: rest[0] });
+      } });
     };
 
     return (
       <div className="animate-in fade-in duration-500 pb-24 md:pb-8">
         <div className="mb-8">
           <h2 className="text-3xl font-black text-black tracking-tight">{texts.tabIngredients}</h2>
-          <p className="text-[#5F5F68] font-medium text-sm mt-2 tracking-wide">先選擇「每月售價」登錄的食材，再輸入重量、耗損與營業稅，試算食材成本。</p>
+          <p className="text-[#5F5F68] font-medium text-sm mt-2 tracking-wide">先選擇「每月售價」登錄的食材，再輸入重量、可用重量與營業稅，試算食材成本。</p>
         </div>
 
         {/* 步驟 1：選擇每月售價登錄的食材 */}
@@ -1542,7 +1676,7 @@ export default function App() {
           </h3>
           {monthlyPrices.length === 0 ? (
             <div className="text-center py-12 bg-[#F5F5F5] rounded-[24px]">
-              <p className="text-[#5F5F68] font-bold mb-4">「{texts.tabMonthlyPrice || '每月售價'}」還沒有登錄任何食材。</p>
+              <p className="text-red-600 font-bold mb-4">「{texts.tabMonthlyPrice || '每月售價'}」還沒有登錄任何食材。</p>
               <button onClick={() => setCurrentTab('monthlyPrice')} className="bg-black hover:bg-neutral-800 text-white px-6 py-3 rounded-full font-bold text-sm transition-all">前往「{texts.tabMonthlyPrice || '每月售價'}」登錄</button>
             </div>
           ) : (
@@ -1564,7 +1698,7 @@ export default function App() {
                 </div>
               </div>
               {pickable.length === 0 ? (
-                <p className="text-[#5F5F68] font-bold text-sm py-6">這個條件下沒有任何食材。</p>
+                <p className="text-red-600 font-bold text-sm py-6">這個條件下沒有任何食材。</p>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 max-h-[360px] overflow-y-auto pr-1">
                   {pickable.map(r => {
@@ -1576,13 +1710,15 @@ export default function App() {
                         className={`text-left p-4 rounded-[20px] border transition-all ${active ? 'bg-black text-white border-black' : 'bg-white border-neutral-200 hover:border-black'}`}
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <span className="font-black text-base leading-tight">{productNameOf(r)}</span>
+                          <span className="font-black text-xl leading-tight tracking-tight">{productNameOf(r)}</span>
                           <span className="font-black text-base shrink-0">${r.price}</span>
                         </div>
                         <p className={`text-[11px] font-bold mt-1.5 ${active ? 'text-neutral-400' : 'text-[#5F5F68]'}`}>
                           {storeNameOf(r.storeId)} · {r.category} · {fmtMonth(r.month)}
                         </p>
-                        {done && <span className={`inline-block mt-2 text-[10px] font-black px-2 py-0.5 rounded-full ${active ? 'bg-white text-black' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>已試算</span>}
+                        {done
+                          ? <span className={`inline-block mt-2 text-[10px] font-black px-2 py-0.5 rounded-full ${active ? 'bg-white text-black' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>已試算</span>
+                          : <span className="blink-red inline-block mt-2 text-[11px] font-black px-2.5 py-0.5 rounded-full bg-red-500 text-white border border-red-600">尚未試算</span>}
                       </button>
                     );
                   })}
@@ -1605,7 +1741,7 @@ export default function App() {
               <div>
                 <label className={labelCls}>售價 ($)</label>
                 <input type="number" min="0" step="any" value={costForm.price} onChange={(e) => setField('price', e.target.value)} className={inputCls} placeholder="0" />
-                <p className="text-[11px] text-[#5F5F68] font-bold mt-2">已帶入每月售價，可自行修改</p>
+                <p className="text-[11px] text-red-600 font-bold mt-2">已帶入每月售價，可自行修改</p>
               </div>
               <div className="space-y-5">
                 <div>
@@ -1647,24 +1783,24 @@ export default function App() {
                 </div>
               </div>
               <div>
-                <label className={labelCls}>耗損 (%)</label>
+                <label className={labelCls}>可用重量 (%)</label>
                 <input type="number" min="0" max="100" step="any" value={costForm.yieldRate} onChange={(e) => setField('yieldRate', e.target.value)} className={inputCls} placeholder="例如 85" />
-                <p className="text-[11px] text-[#5F5F68] font-bold mt-2">填可用比例：85 代表 重量 × 85%</p>
+                <p className="text-[11px] text-red-600 font-bold mt-2">填可用比例：85 代表 重量 × 85%</p>
                 <input type="text" value={costForm.yieldNote || ''} onChange={(e) => setField('yieldNote', e.target.value)} className={`${inputCls} mt-3 text-sm`} placeholder="算法說明，例如：去骨後剩 85%" aria-label="耗損算法說明" />
               </div>
               <div>
                 <label className={labelCls}>營業稅 (%)</label>
                 <input type="number" min="0" step="any" value={costForm.taxRate} onChange={(e) => setField('taxRate', e.target.value)} className={inputCls} placeholder="例如 5" />
-                <p className="text-[11px] text-[#5F5F68] font-bold mt-2">填 5 代表 × 1.05</p>
+                <p className="text-[11px] text-red-600 font-bold mt-2">填 5 代表 × 1.05</p>
               </div>
             </div>
 
             <div className="mt-8 bg-[#111111] rounded-[24px] p-6 flex flex-col md:flex-row md:items-center justify-between gap-5">
               <div className="min-w-0">
-                <span className="block text-[10px] text-neutral-500 font-bold uppercase tracking-widest mb-2">計算式　售價 ÷（重量 × 耗損）× 營業稅</span>
+                <span className="block text-[10px] text-neutral-500 font-bold uppercase tracking-widest mb-2">計算式　售價 ÷（重量 × 可用重量）× 營業稅</span>
                 <p className="text-sm font-bold text-neutral-300 break-words">
                   {result === null
-                    ? '請完整輸入售價、重量、耗損與營業稅（重量與耗損需大於 0）。'
+                    ? '請完整輸入售價、重量、可用重量與營業稅（重量與可用重量需大於 0）。'
                     : `$${price} ÷（${weight}${unit} × ${yieldPct}%）× (1 + ${taxPct}%)`}
                 </p>
               </div>
@@ -1685,7 +1821,7 @@ export default function App() {
         {/* 已儲存的食材成本 */}
         <h3 className="text-xl font-black text-black tracking-tight mb-5">已儲存的食材成本 <span className="text-[#5F5F68] text-sm font-bold ml-2">共 {costCalcs.length} 筆</span></h3>
         {costCalcs.length === 0 ? (
-          <div className="text-center py-16 text-[#5F5F68] font-medium rounded-[32px] bg-[#F5F5F5]">尚未儲存任何食材成本。</div>
+          <div className="text-center py-16 text-red-600 font-bold rounded-[32px] bg-[#F5F5F5]">尚未儲存任何食材成本。</div>
         ) : (
           <div className="bg-white rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] overflow-hidden">
             <div className="overflow-x-auto">
@@ -1695,7 +1831,7 @@ export default function App() {
                     <th className="px-6 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest">食材</th>
                     <th className="px-4 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">售價</th>
                     <th className="px-4 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">重量</th>
-                    <th className="px-4 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">耗損</th>
+                    <th className="px-4 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">可用重量</th>
                     <th className="px-4 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">營業稅</th>
                     <th className="px-6 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">食材成本</th>
                     <th className="px-3 py-4 w-24"></th>
@@ -1839,7 +1975,9 @@ export default function App() {
       </nav>
 
       {renderUIEditor()}
+      <style>{'@keyframes blinkRed{0%,100%{opacity:1}50%{opacity:.2}} .blink-red{animation:blinkRed 1s ease-in-out infinite}'}</style>
       {renderToast()}
+      {renderConfirmDialog()}
 
     </div>
   );
