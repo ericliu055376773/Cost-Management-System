@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, Lock, ChevronLeft, Package, Calculator, DollarSign, Beef, Carrot, Fish, Coffee, CheckCircle, AlertCircle, Utensils, Plus, Trash2, Edit2, Layers, ChevronRight, Store, Settings, Save, Scale, Receipt, FolderPlus, Tag, Type, Download, Upload, RotateCcw, X, Database } from 'lucide-react';
+import { Search, Lock, ChevronLeft, Package, Calculator, DollarSign, Beef, Carrot, Fish, Coffee, CheckCircle, AlertCircle, Utensils, Plus, Trash2, Edit2, Layers, ChevronRight, Store, Settings, Save, Scale, Receipt, FolderPlus, Tag, Type, Download, Upload, RotateCcw, X, Database, CalendarDays } from 'lucide-react';
 
 // ==========================================
 // 本機資料儲存（獨立版，不再連接任何雲端或進貨系統）
@@ -11,12 +11,31 @@ const STORAGE_KEY = 'cost-management-system-data-v1';
 const newUid = () => `u-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const withUids = (list) => list.map((item) => ({ ...item, uid: item.uid || newUid() }));
 
+// 舊版曾內建範例食材與商品；只移除「與範例完全相同、未被修改」的項目
+const stripSampleData = (data) => {
+  const strip = (o) => { const { uid, ...rest } = o || {}; return JSON.stringify(rest, Object.keys(rest).sort()); };
+  const sampleRaw = new Set(SAMPLE_RAW_DATA.map(strip));
+  const rawErpData = Array.isArray(data.rawErpData) ? data.rawErpData.filter(i => !sampleRaw.has(strip(i))) : data.rawErpData;
+  const keptNames = new Set((rawErpData || []).map(i => i.name));
+  let productRules = data.productRules;
+  if (productRules && typeof productRules === 'object') {
+    productRules = { ...productRules };
+    Object.keys(SAMPLE_RULES).forEach(name => {
+      if (!keptNames.has(name) && JSON.stringify(productRules[name]) === JSON.stringify(SAMPLE_RULES[name])) delete productRules[name];
+    });
+  }
+  const sampleMenu = JSON.stringify(SAMPLE_SET_MENUS[0]);
+  const setMenus = Array.isArray(data.setMenus) ? data.setMenus.filter(m => JSON.stringify(m) !== sampleMenu) : data.setMenus;
+  return { ...data, rawErpData, productRules, setMenus, samplesRemoved: true };
+};
+
 const loadSavedData = () => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
-    return data && typeof data === 'object' ? data : null;
+    if (!data || typeof data !== 'object') return null;
+    return data.samplesRemoved ? data : stripSampleData(data);
   } catch (e) {
     console.error('讀取本機資料失敗:', e);
     return null;
@@ -37,7 +56,7 @@ const getColorByCategory = () => {
 };
 
 // 初始原始資料
-const initialRawData = [
+const SAMPLE_RAW_DATA = [
   { category: '肉類', vendor: '美福頂級肉品', name: '無骨雞腿肉', code: 'M001', rawPrice: 120, unit: 'kg' },
   { category: '肉類', vendor: '美福頂級肉品', name: '特級牛五花', code: 'M002', rawPrice: 350, unit: 'kg' },
   { category: '蔬菜類', vendor: '產地直送', name: '高山高麗菜', code: 'V001', rawPrice: 45, unit: 'kg' },
@@ -45,7 +64,7 @@ const initialRawData = [
   { category: '海鮮類', vendor: '極鮮海產批發', name: '冷凍白蝦 (40/50)', code: 'S001', rawPrice: 280, unit: 'kg' },
 ];
 
-const defaultRules = {
+const SAMPLE_RULES = {
   '無骨雞腿肉': { yieldRate: 85, calculationText: '進貨價 ÷ 淨肉率 (85%)', recipeUnit: 'g', recipeConversion: 1000 },
   '特級牛五花': { yieldRate: 90, calculationText: '進貨價 ÷ 淨肉率 (90%)', recipeUnit: 'g', recipeConversion: 1000 },
   '高山高麗菜': { yieldRate: 70, calculationText: '去外葉耗損 (70%)', recipeUnit: 'g', recipeConversion: 1000 },
@@ -60,6 +79,7 @@ const defaultUITexts = {
   loginButton: 'Reset',
   loginCancel: 'Cancel',
   sidebarMenu: '主選單',
+  tabMonthlyPrice: '每月售價',
   tabIngredients: '食材成本',
   tabSetMenus: '商品計算',
   tabSettings: '成本參數',
@@ -70,7 +90,7 @@ const defaultUITexts = {
 
 const defaultGlobalSettings = { taxRate: 5, systemName: 'FINERP', uiTexts: defaultUITexts };
 
-const initialSetMenus = [
+const SAMPLE_SET_MENUS = [
   {
     id: 'sm1', name: '綜合大菜盤', sellingPrice: 180,
     categories: [
@@ -92,6 +112,32 @@ const initialSetMenus = [
   }
 ];
 
+// 食材成本 = 售價 ÷（重量 × 耗損）× (1 + 營業稅)
+const calcCost = (price, weight, yieldPct, taxPct) => {
+  if (!(price >= 0) || !(weight > 0) || !(yieldPct > 0) || !(taxPct >= 0)) return null;
+  return price / (weight * (yieldPct / 100)) * (1 + taxPct / 100);
+};
+
+// 舊版「商品 → 分類 → 單品」結構：把每個分類原樣轉成獨立的分類卡片（只搬來自食材成本的單品）
+const migrateRecipeCategories = (menus) => (Array.isArray(menus) ? menus : []).flatMap(m =>
+  (m.categories || [])
+    .filter(c => (c.items || []).some(i => i.costCalcId))
+    .map(c => ({
+      id: `cc-${newUid()}`,
+      name: c.name || '未命名分類',
+      items: c.items.filter(i => i.costCalcId).map(i => ({
+        id: `ci-${newUid()}`, costCalcId: i.costCalcId, itemName: i.itemName, storeName: i.vendorName || '',
+        recipeCost: i.recipeCost || 0, recipeUnit: i.recipeUnit, qty: i.qty
+      }))
+    })));
+
+const defaultUnits = ['g', 'kg', '台斤', '斤', '個', '片', '份', '包', 'ml', 'L'];
+
+// 系統預設為空白，不再內建範例資料
+const initialRawData = [];
+const defaultRules = {};
+const initialSetMenus = [];
+
 export default function App() {
   const [initialSaved] = useState(loadSavedData);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -102,15 +148,22 @@ export default function App() {
   
   const [currentTab, setCurrentTab] = useState('ingredients'); 
   const [notice, setNotice] = useState(null);
-  const [editingIngredient, setEditingIngredient] = useState(null);
+  const [costCalcs, setCostCalcs] = useState(() => Array.isArray(initialSaved?.costCalcs) ? initialSaved.costCalcs : []);
+  const [costPickId, setCostPickId] = useState(null);
+  const [addingItem, setAddingItem] = useState(null);
+  const [costCategories, setCostCategories] = useState(() => Array.isArray(initialSaved?.costCategories) ? initialSaved.costCategories : migrateRecipeCategories(initialSaved?.setMenus));
+  const [openCategoryId, setOpenCategoryId] = useState(null);
+  const [showNewCategory, setShowNewCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [units, setUnits] = useState(() => Array.isArray(initialSaved?.units) && initialSaved.units.length > 0 ? initialSaved.units : defaultUnits);
+  const [unitPanel, setUnitPanel] = useState({ open: false, newName: '' });
+  const [costMonthFilter, setCostMonthFilter] = useState('');
+  const [costStoreFilter, setCostStoreFilter] = useState('');
+  const [costForm, setCostForm] = useState({ price: '', weight: '', weightUnit: 'g', yieldRate: '', yieldNote: '', taxRate: '' });
   const fileInputRef = useRef(null);
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState(null); 
-  const [selectedVendor, setSelectedVendor] = useState(null);     
   
-  const [editingMenu, setEditingMenu] = useState(null); 
-  const [ingredientCategoryFilters, setIngredientCategoryFilters] = useState({}); 
   
   const [settingsCategoryFilter, setSettingsCategoryFilter] = useState('全部');
   const [settingsSearchQuery, setSettingsSearchQuery] = useState('');
@@ -127,8 +180,12 @@ export default function App() {
   const [editingGlobalSettings, setEditingGlobalSettings] = useState(defaultGlobalSettings);
   const [setMenus, setSetMenus] = useState(() => Array.isArray(initialSaved?.setMenus) ? initialSaved.setMenus : initialSetMenus);
 
+  const [stores, setStores] = useState(() => Array.isArray(initialSaved?.stores) ? initialSaved.stores : []);
+  const [monthlyPrices, setMonthlyPrices] = useState(() => Array.isArray(initialSaved?.monthlyPrices) ? initialSaved.monthlyPrices : []);
+  const [selectedMonth, setSelectedMonth] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; });
+  const [mpForm, setMpForm] = useState({ storeId: '', category: '', menuId: '', price: '' });
+  const [newStoreName, setNewStoreName] = useState('');
   const [foodCostPercent, setFoodCostPercent] = useState(() => typeof initialSaved?.foodCostPercent === 'number' ? initialSaved.foodCostPercent : 33.33);
-  const [menuCategoryFilter, setMenuCategoryFilter] = useState('全部');
   const [isEditingUI, setIsEditingUI] = useState(false);
   const [tempUITexts, setTempUITexts] = useState(defaultUITexts);
   const [tempSystemName, setTempSystemName] = useState(defaultGlobalSettings.systemName);
@@ -184,6 +241,13 @@ export default function App() {
 
   // 跨系統比對：代號優先 → 名稱+廠商 → 僅名稱 → 原始資料
   const findIngredient = (ig) => {
+    if (ig.costCalcId) {
+      const calc = costCalcs.find(c => c.id === ig.costCalcId);
+      const live = calc ? calcCost(calc.price, calc.weight, calc.yieldRate, calc.taxRate) : null;
+      // 食材成本有更新就跟著更新；若該筆已被刪除，沿用當初加入時的成本
+      if (live !== null) return { ...ig, recipeCost: live, finalCost: live, recipeUnit: calc.weightUnit, unit: calc.weightUnit, vendorName: calc.storeName, itemName: calc.menuName };
+      return ig;
+    }
     return (ig.itemCode && allAvailableIngredients.find(a => a.code && a.code === ig.itemCode))
       || allAvailableIngredients.find(a => a.name === ig.itemName && a.vendorName === ig.vendorName)
       || allAvailableIngredients.find(a => a.name === ig.itemName)
@@ -204,11 +268,6 @@ export default function App() {
     const cats = new Set(uniqueProductsForSettings.map(item => item.category));
     return ['全部', ...Array.from(cats)];
   }, [uniqueProductsForSettings]);
-
-  const menuCategoryList = useMemo(() => {
-    const cats = new Set(setMenus.map(m => m.menuCategory).filter(Boolean));
-    return ['全部', ...Array.from(cats)];
-  }, [setMenus]);
 
   const filteredSettingsProducts = useMemo(() => {
     return uniqueProductsForSettings.filter(item => {
@@ -256,13 +315,13 @@ export default function App() {
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        version: 1, rawErpData, productRules, globalSettings, setMenus, foodCostPercent
+        version: 1, samplesRemoved: true, rawErpData, productRules, globalSettings, setMenus, foodCostPercent, stores, monthlyPrices, costCalcs, units, costCategories
       }));
     } catch (e) {
       console.error('本機儲存失敗:', e);
       showNotice('error', '儲存失敗：瀏覽器儲存空間不足或已停用。');
     }
-  }, [rawErpData, productRules, globalSettings, setMenus, foodCostPercent]);
+  }, [rawErpData, productRules, globalSettings, setMenus, foodCostPercent, stores, monthlyPrices, costCalcs, units, costCategories]);
 
   const saveSettings = () => {
     setProductRules(editingRules);
@@ -277,7 +336,7 @@ export default function App() {
   const handleExport = () => {
     const data = {
       app: 'cost-management-system', version: 1, exportedAt: new Date().toISOString(),
-      rawErpData, productRules, globalSettings, setMenus, foodCostPercent
+      rawErpData, productRules, globalSettings, setMenus, foodCostPercent, stores, monthlyPrices, costCalcs, units, costCategories
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -310,6 +369,13 @@ export default function App() {
         });
         setSetMenus(Array.isArray(data.setMenus) ? data.setMenus : []);
         setFoodCostPercent(typeof data.foodCostPercent === 'number' ? data.foodCostPercent : 33.33);
+        setStores(Array.isArray(data.stores) ? data.stores : []);
+        setMonthlyPrices(Array.isArray(data.monthlyPrices) ? data.monthlyPrices : []);
+        setCostCalcs(Array.isArray(data.costCalcs) ? data.costCalcs : []);
+        setUnits(Array.isArray(data.units) && data.units.length > 0 ? data.units : defaultUnits);
+        setCostCategories(Array.isArray(data.costCategories) ? data.costCategories : migrateRecipeCategories(data.setMenus));
+        setOpenCategoryId(null);
+        setCostPickId(null);
         showNotice('success', '備份匯入成功！');
       } catch (err) {
         console.error(err);
@@ -320,69 +386,23 @@ export default function App() {
   };
 
   const handleResetAll = () => {
-    if (!window.confirm('這會清除所有食材、規則與商品配方並還原為預設範例資料，確定嗎？（建議先匯出備份）')) return;
+    if (!window.confirm('這會清除所有食材、規則、商品配方、門店與售價紀錄，確定嗎？（建議先匯出備份）')) return;
     setRawErpData(withUids(initialRawData));
     setProductRules(defaultRules);
     setGlobalSettings(defaultGlobalSettings);
     setSetMenus(initialSetMenus);
     setFoodCostPercent(33.33);
+    setStores([]);
+    setMonthlyPrices([]);
+    setCostCalcs([]);
+    setUnits(defaultUnits);
+    setCostCategories([]);
+    setOpenCategoryId(null);
+    setCostPickId(null);
+    setMpForm({ storeId: '', category: '', menuId: '', price: '' });
     setEditingRules(defaultRules);
     setEditingGlobalSettings(defaultGlobalSettings);
-    showNotice('success', '已還原為預設資料。');
-  };
-
-  // ==========================================
-  // 食材管理（新增 / 編輯 / 刪除）
-  // ==========================================
-  const openNewIngredient = (preset = {}) => {
-    setEditingIngredient({ uid: null, category: preset.category || '', vendor: preset.vendor || '', name: '', code: '', rawPrice: '', unit: 'kg' });
-  };
-
-  const openEditIngredient = (uid) => {
-    const raw = rawErpData.find(i => i.uid === uid);
-    if (raw) setEditingIngredient({ ...raw });
-  };
-
-  const handleSaveIngredient = () => {
-    const f = editingIngredient;
-    const name = (f.name || '').trim();
-    const category = (f.category || '').trim();
-    const vendor = (f.vendor || '').trim();
-    const unit = (f.unit || '').trim();
-    const code = (f.code || '').trim().toUpperCase();
-    const price = parseFloat(f.rawPrice);
-
-    if (!name || !category || !vendor || !unit) { showNotice('error', '請填寫名稱、分類、廠商與單位。'); return; }
-    if (isNaN(price) || price < 0) { showNotice('error', '請輸入正確的進貨單價。'); return; }
-    if (code && rawErpData.some(i => i.code === code && i.uid !== f.uid)) { showNotice('error', `代號 ${code} 已被其他食材使用。`); return; }
-    if (rawErpData.some(i => i.uid !== f.uid && i.name === name && i.vendor === vendor)) { showNotice('error', '此廠商已有同名食材。'); return; }
-
-    const entry = { uid: f.uid || newUid(), category, vendor, name, code, rawPrice: price, unit };
-
-    if (f.uid) {
-      const old = rawErpData.find(i => i.uid === f.uid);
-      setRawErpData(prev => prev.map(i => i.uid === f.uid ? entry : i));
-      // 改名時，把原本的良率 / 規格轉換規則一併帶過去
-      if (old && old.name !== name && productRules[old.name] && !rawErpData.some(i => i.uid !== f.uid && i.name === old.name)) {
-        setProductRules(prev => {
-          const next = { ...prev, [name]: prev[name] || prev[old.name] };
-          delete next[old.name];
-          return next;
-        });
-      }
-    } else {
-      setRawErpData(prev => [...prev, entry]);
-    }
-    setEditingIngredient(null);
-    showNotice('success', f.uid ? '食材已更新。' : '食材已新增。');
-  };
-
-  const handleDeleteIngredient = (uid) => {
-    const target = rawErpData.find(i => i.uid === uid);
-    if (!target) return;
-    if (!window.confirm(`確定要刪除「${target.name}」嗎？`)) return;
-    setRawErpData(prev => prev.filter(i => i.uid !== uid));
-    showNotice('success', '食材已刪除。');
+    showNotice('success', '已清空所有資料。');
   };
 
   const openUIEditor = () => {
@@ -410,26 +430,16 @@ export default function App() {
     ));
   };
 
-  const searchResults = useMemo(() => {
-    if (!searchQuery.trim()) return [];
-    return allAvailableIngredients.filter(item => 
-      item.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-      item.categoryName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.vendorName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (item.code && item.code.toLowerCase().includes(searchQuery.toLowerCase()))
-    );
-  }, [searchQuery, allAvailableIngredients]);
-
   const renderUIEditor = () => {
     if (!isEditingUI) return null;
     
     const renderInputField = (label, valueKey) => (
       <div key={valueKey}>
-        <label className="block text-xs font-bold text-[#7F7F7F] mb-2 tracking-widest uppercase">{label}</label>
+        <label className="block text-xs font-bold text-[#5F5F68] mb-2 tracking-widest uppercase">{label}</label>
         <input 
           type="text" value={tempUITexts[valueKey] || ''}
           onChange={(e) => setTempUITexts({...tempUITexts, [valueKey]: e.target.value})}
-          className="w-full bg-[#F5F5F5] border-transparent rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all"
+          className="w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all"
         />
       </div>
     );
@@ -449,7 +459,7 @@ export default function App() {
         </div>
 
         <div className="max-w-3xl mx-auto w-full p-6 py-8 space-y-8">
-          <section className="bg-white p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100">
+          <section className="bg-[#DEDEE4] p-8 rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE]">
              <h3 className="font-black text-lg text-black mb-6 flex items-center gap-3">
                <div className="p-2 bg-[#F5F5F5] rounded-full"><Lock size={18} className="text-black"/></div>
                登入畫面文字
@@ -462,21 +472,22 @@ export default function App() {
              </div>
           </section>
           
-          <section className="bg-white p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100">
+          <section className="bg-[#DEDEE4] p-8 rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE]">
              <h3 className="font-black text-lg text-black mb-6 flex items-center gap-3">
                <div className="p-2 bg-[#F5F5F5] rounded-full"><Type size={18} className="text-black"/></div>
                導覽列與介面文字
              </h3>
              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                <div>
-                 <label className="block text-xs font-bold text-[#7F7F7F] mb-2 tracking-widest uppercase">系統名稱 (LOGO)</label>
+                 <label className="block text-xs font-bold text-[#5F5F68] mb-2 tracking-widest uppercase">系統名稱 (LOGO)</label>
                  <input 
                    type="text" value={tempSystemName}
                    onChange={(e) => setTempSystemName(e.target.value)}
-                   className="w-full bg-[#F5F5F5] border-transparent rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all"
+                   className="w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all"
                  />
                </div>
                {renderInputField("側邊欄群組標題", "sidebarMenu")}
+               {renderInputField("每月售價 分頁名稱", "tabMonthlyPrice")}
                {renderInputField("分頁 1 名稱", "tabIngredients")}
                {renderInputField("分頁 2 名稱", "tabSetMenus")}
                {renderInputField("分頁 3 名稱", "tabSellingPrice")}
@@ -497,61 +508,6 @@ export default function App() {
       <div className={`fixed bottom-28 md:bottom-8 right-4 md:right-8 z-[120] max-w-sm p-4 rounded-2xl flex items-center text-sm font-bold shadow-[0_10px_30px_rgba(0,0,0,0.12)] border ${ok ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-500 border-red-200'}`}>
         {ok ? <CheckCircle className="w-4 h-4 mr-2 shrink-0" /> : <AlertCircle className="w-4 h-4 mr-2 shrink-0" />}
         <span>{notice.text}</span>
-      </div>
-    );
-  };
-
-  const renderIngredientEditor = () => {
-    if (!editingIngredient) return null;
-    const f = editingIngredient;
-    const setField = (key, value) => setEditingIngredient({ ...f, [key]: value });
-    const inputCls = 'w-full bg-[#F5F5F5] border-transparent rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all';
-    const labelCls = 'block text-xs font-bold text-[#7F7F7F] mb-2 tracking-widest uppercase';
-    const categoryOptions = Array.from(new Set(rawErpData.map(i => i.category)));
-    const vendorOptions = Array.from(new Set(rawErpData.map(i => i.vendor)));
-    const unitOptions = ['kg', 'g', '台斤', '斤', '包', '箱', '盒', '瓶', '個', '片', '份', '件', 'L', 'ml'];
-
-    return (
-      <div className="fixed inset-0 z-[110] bg-black/40 flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setEditingIngredient(null)}>
-        <div className="bg-white rounded-[32px] w-full max-w-lg max-h-[90vh] overflow-y-auto p-8 shadow-[0_20px_60px_rgba(0,0,0,0.2)]" onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-2xl font-black text-black tracking-tight">{f.uid ? '編輯食材' : '新增食材'}</h3>
-            <button onClick={() => setEditingIngredient(null)} className="w-10 h-10 flex items-center justify-center bg-[#F5F5F5] rounded-full text-black hover:bg-neutral-200 transition-colors"><X size={18} /></button>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-            <div className="sm:col-span-2">
-              <label className={labelCls}>食材名稱</label>
-              <input type="text" value={f.name} onChange={(e) => setField('name', e.target.value)} className={inputCls} placeholder="例如：無骨雞腿肉" autoFocus />
-            </div>
-            <div>
-              <label className={labelCls}>代號（選填）</label>
-              <input type="text" value={f.code || ''} onChange={(e) => setField('code', e.target.value.toUpperCase())} className={inputCls} placeholder="例如：M001" />
-            </div>
-            <div>
-              <label className={labelCls}>分類</label>
-              <input type="text" list="ingredient-category-list" value={f.category} onChange={(e) => setField('category', e.target.value)} className={inputCls} placeholder="例如：肉類" />
-              <datalist id="ingredient-category-list">{categoryOptions.map(c => <option key={c} value={c} />)}</datalist>
-            </div>
-            <div className="sm:col-span-2">
-              <label className={labelCls}>廠商</label>
-              <input type="text" list="ingredient-vendor-list" value={f.vendor} onChange={(e) => setField('vendor', e.target.value)} className={inputCls} placeholder="例如：美福頂級肉品" />
-              <datalist id="ingredient-vendor-list">{vendorOptions.map(v => <option key={v} value={v} />)}</datalist>
-            </div>
-            <div>
-              <label className={labelCls}>進貨單價 ($)</label>
-              <input type="number" min="0" step="0.01" value={f.rawPrice} onChange={(e) => setField('rawPrice', e.target.value)} className={inputCls} placeholder="0" />
-            </div>
-            <div>
-              <label className={labelCls}>進貨單位</label>
-              <input type="text" list="ingredient-unit-list" value={f.unit} onChange={(e) => setField('unit', e.target.value)} className={inputCls} placeholder="例如：kg" />
-              <datalist id="ingredient-unit-list">{unitOptions.map(u => <option key={u} value={u} />)}</datalist>
-            </div>
-          </div>
-          <div className="flex gap-3 mt-8">
-            <button onClick={() => setEditingIngredient(null)} className="flex-1 bg-[#F5F5F5] hover:bg-neutral-200 text-black py-3.5 rounded-full font-bold text-sm transition-all">取消</button>
-            <button onClick={handleSaveIngredient} className="flex-1 bg-black hover:bg-neutral-800 text-white py-3.5 rounded-full font-bold text-sm transition-all">儲存</button>
-          </div>
-        </div>
       </div>
     );
   };
@@ -616,7 +572,7 @@ export default function App() {
               <button
                type="button"
                onClick={() => setPin('')}
-               className="w-full text-center mt-6 text-[#7F7F7F] hover:text-black font-bold text-sm tracking-wide transition-colors"
+               className="w-full text-center mt-6 text-[#5F5F68] hover:text-black font-bold text-sm tracking-wide transition-colors"
               >
                 {texts.loginCancel}
               </button>
@@ -633,7 +589,7 @@ export default function App() {
         <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
           <div>
             <h2 className="text-3xl font-black text-black tracking-tight">{texts.tabSettings}</h2>
-            <p className="text-[#7F7F7F] font-medium text-sm mt-2 tracking-wide">設定全域稅率、顯示名稱與各項食材規則。</p>
+            <p className="text-[#5F5F68] font-medium text-sm mt-2 tracking-wide">設定全域稅率、顯示名稱與各項食材規則。</p>
           </div>
           <button 
             onClick={saveSettings}
@@ -643,56 +599,56 @@ export default function App() {
           </button>
         </div>
 
-        <div className="bg-white p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 mb-8">
+        <div className="bg-[#DEDEE4] p-8 rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] mb-8">
            <h3 className="font-black text-lg text-black mb-6 flex items-center gap-3">
              <div className="p-2 bg-[#F5F5F5] rounded-full"><Receipt size={20} className="text-black"/></div>
              全域系統設定
            </h3>
            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl">
               <div>
-                 <label className="block text-xs font-bold text-[#7F7F7F] mb-3 tracking-widest uppercase">系統顯示名稱 (LOGO)</label>
+                 <label className="block text-xs font-bold text-[#5F5F68] mb-3 tracking-widest uppercase">系統顯示名稱 (LOGO)</label>
                  <div className="relative">
                    <input 
                      type="text"
                      value={editingGlobalSettings.systemName || ''}
                      onChange={(e) => setEditingGlobalSettings({...editingGlobalSettings, systemName: e.target.value})}
-                     className="w-full bg-[#F5F5F5] border-transparent rounded-[20px] px-5 py-4 text-black outline-none focus:ring-2 focus:ring-black font-black transition-all text-lg"
+                     className="w-full bg-white border border-[#B4B4BE] rounded-[20px] px-5 py-4 text-black outline-none focus:ring-2 focus:ring-black font-black transition-all text-lg"
                      placeholder="例如: FINERP"
                    />
                  </div>
               </div>
               <div>
-                 <label className="block text-xs font-bold text-[#7F7F7F] mb-3 tracking-widest uppercase">營業稅率 (%)</label>
+                 <label className="block text-xs font-bold text-[#5F5F68] mb-3 tracking-widest uppercase">營業稅率 (%)</label>
                  <div className="relative">
                    <input 
                      type="number" min="0" max="100" step="0.1"
                      value={editingGlobalSettings.taxRate}
                      onChange={(e) => setEditingGlobalSettings({...editingGlobalSettings, taxRate: parseFloat(e.target.value) || 0})}
-                     className="w-full bg-[#F5F5F5] border-transparent rounded-[20px] px-5 py-4 text-black outline-none focus:ring-2 focus:ring-black font-black transition-all text-lg"
+                     className="w-full bg-white border border-[#B4B4BE] rounded-[20px] px-5 py-4 text-black outline-none focus:ring-2 focus:ring-black font-black transition-all text-lg"
                    />
                  </div>
               </div>
            </div>
         </div>
 
-        <div className="bg-white p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 mb-8">
+        <div className="bg-[#DEDEE4] p-8 rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] mb-8">
            <h3 className="font-black text-lg text-black mb-3 flex items-center gap-3">
              <div className="p-2 bg-[#F5F5F5] rounded-full"><Database size={20} className="text-black"/></div>
              資料備份與還原
            </h3>
-           <p className="text-[#7F7F7F] font-medium text-sm mb-6 leading-relaxed">所有資料都儲存在這個瀏覽器中。清除瀏覽器資料或更換裝置前，請先匯出備份檔。</p>
+           <p className="text-[#5F5F68] font-medium text-sm mb-6 leading-relaxed">所有資料都儲存在這個瀏覽器中。清除瀏覽器資料或更換裝置前，請先匯出備份檔。</p>
            <div className="flex flex-wrap gap-3">
              <button onClick={handleExport} className="flex items-center gap-2 bg-black hover:bg-neutral-800 text-white px-6 py-3 rounded-full font-bold text-sm transition-all"><Download size={16} /> 匯出備份</button>
              <button onClick={() => fileInputRef.current && fileInputRef.current.click()} className="flex items-center gap-2 bg-[#F5F5F5] hover:bg-neutral-200 text-black px-6 py-3 rounded-full font-bold text-sm transition-all"><Upload size={16} /> 匯入備份</button>
-             <button onClick={handleResetAll} className="flex items-center gap-2 bg-[#F5F5F5] hover:bg-red-50 text-red-500 px-6 py-3 rounded-full font-bold text-sm transition-all"><RotateCcw size={16} /> 還原為預設資料</button>
+             <button onClick={handleResetAll} className="flex items-center gap-2 bg-[#F5F5F5] hover:bg-red-50 text-red-500 px-6 py-3 rounded-full font-bold text-sm transition-all"><RotateCcw size={16} /> 清空所有資料</button>
              <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={handleImport} className="hidden" />
            </div>
         </div>
 
-        <div className="bg-white p-6 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 mb-8 flex flex-col gap-5">
+        <div className="bg-[#DEDEE4] p-6 rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] mb-8 flex flex-col gap-5">
            <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
-                <Search className="h-5 w-5 text-[#7F7F7F]" />
+                <Search className="h-5 w-5 text-[#5F5F68]" />
               </div>
               <input
                 type="text" value={settingsSearchQuery} onChange={(e) => setSettingsSearchQuery(e.target.value)}
@@ -704,7 +660,7 @@ export default function App() {
               {availableCategories.map(cat => (
                  <button
                    key={cat} onClick={() => setSettingsCategoryFilter(cat)}
-                   className={`px-5 py-2.5 rounded-full font-bold text-sm transition-all ${settingsCategoryFilter === cat ? 'bg-black text-white' : 'bg-[#F5F5F5] text-[#7F7F7F] hover:bg-neutral-200 hover:text-black'}`}
+                   className={`px-5 py-2.5 rounded-full font-bold text-sm transition-all ${settingsCategoryFilter === cat ? 'bg-black text-white' : 'bg-[#F5F5F5] text-[#5F5F68] hover:bg-neutral-200 hover:text-black'}`}
                  >
                    {cat}
                  </button>
@@ -721,7 +677,7 @@ export default function App() {
             const previewRecipeCost = previewCost / rConv;
 
             return (
-              <div key={idx} className="bg-white rounded-[32px] p-8 shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 flex flex-col">
+              <div key={idx} className="bg-[#DEDEE4] rounded-[32px] p-8 shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] flex flex-col">
                 <div className="flex justify-between items-start mb-6">
                   <div>
                     <div className="flex items-center gap-2 mb-2">
@@ -730,32 +686,32 @@ export default function App() {
                         onChange={(e) => handleCodeChange(item.name, item.vendor, e.target.value.toUpperCase())}
                         className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full border outline-none transition-all w-24 text-center ${item.code ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-[#ACACAC] bg-white border-dashed border-neutral-300 focus:border-emerald-500 focus:bg-emerald-50'}`}
                       />
-                      <span className="text-[10px] font-bold text-[#7F7F7F] uppercase tracking-widest">{item.category}</span>
+                      <span className="text-[10px] font-bold text-[#5F5F68] uppercase tracking-widest">{item.category}</span>
                     </div>
                     <h3 className="text-2xl font-black text-black leading-tight tracking-tight">{item.name}</h3>
                   </div>
                   <div className="text-right">
-                    <span className="text-[10px] text-[#7F7F7F] font-bold tracking-widest uppercase block mb-1">進貨參考價</span>
-                    <span className="font-black text-black text-lg">${item.rawPrice} <span className="text-xs text-[#7F7F7F] font-medium">/{item.unit}</span></span>
+                    <span className="text-[10px] text-[#5F5F68] font-bold tracking-widest uppercase block mb-1">進貨參考價</span>
+                    <span className="font-black text-black text-lg">${item.rawPrice} <span className="text-xs text-[#5F5F68] font-medium">/{item.unit}</span></span>
                   </div>
                 </div>
 
                 <div className="space-y-5 flex-1">
                   <div>
-                    <label className="block text-xs font-bold text-[#7F7F7F] mb-3 tracking-widest uppercase">淨肉率 / 良率 (%)</label>
+                    <label className="block text-xs font-bold text-[#5F5F68] mb-3 tracking-widest uppercase">淨肉率 / 良率 (%)</label>
                     <input 
                       type="number" min="1" max="100" value={rule.yieldRate}
                       onChange={(e) => handleRuleChange(item.name, 'yieldRate', e.target.value === '' ? '' : (parseFloat(e.target.value) || 0))}
-                      className="w-full bg-[#F5F5F5] border-transparent rounded-[20px] px-5 py-4 text-black outline-none focus:ring-2 focus:ring-black font-black"
+                      className="w-full bg-white border border-[#B4B4BE] rounded-[20px] px-5 py-4 text-black outline-none focus:ring-2 focus:ring-black font-black"
                     />
                   </div>
                   
                   {/* 規格轉換區塊 */}
                   <div className="bg-[#F5F5F5] rounded-[24px] p-5">
-                    <label className="block text-xs font-bold text-[#7F7F7F] mb-4 tracking-widest uppercase">規格轉換（配方用量計算）</label>
+                    <label className="block text-xs font-bold text-[#5F5F68] mb-4 tracking-widest uppercase">規格轉換（配方用量計算）</label>
                     <div className="flex items-center gap-3 flex-wrap">
                       <span className="bg-white px-4 py-3 rounded-[16px] font-black text-black border border-neutral-200 shrink-0">1 {item.unit}</span>
-                      <span className="text-[#7F7F7F] font-bold">=</span>
+                      <span className="text-[#5F5F68] font-bold">=</span>
                       <input 
                         type="number" min="0.01" step="0.01" value={rule.recipeConversion || 1}
                         onChange={(e) => handleRuleChange(item.name, 'recipeConversion', e.target.value === '' ? '' : (parseFloat(e.target.value) || 0))}
@@ -782,32 +738,32 @@ export default function App() {
                         <option value="件">件</option>
                       </select>
                     </div>
-                    <p className="text-[10px] text-[#7F7F7F] font-bold mt-3">
+                    <p className="text-[10px] text-[#5F5F68] font-bold mt-3">
                       例如：1箱 = 3000 g，1包 = 600 g，1箱 = 12 個
                     </p>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-[#7F7F7F] mb-3 tracking-widest uppercase">成本算法說明</label>
+                    <label className="block text-xs font-bold text-[#5F5F68] mb-3 tracking-widest uppercase">成本算法說明</label>
                     <input 
                       type="text" value={rule.calculationText}
                       onChange={(e) => handleRuleChange(item.name, 'calculationText', e.target.value)}
-                      className="w-full bg-[#F5F5F5] border-transparent rounded-[20px] px-5 py-4 text-black outline-none focus:ring-2 focus:ring-black font-medium"
+                      className="w-full bg-white border border-[#B4B4BE] rounded-[20px] px-5 py-4 text-black outline-none focus:ring-2 focus:ring-black font-medium"
                     />
                   </div>
                 </div>
 
                 {rConv > 1 && (
                   <div className="mt-6 bg-neutral-50 rounded-[20px] px-5 py-4">
-                    <span className="text-[10px] text-[#7F7F7F] font-bold tracking-widest uppercase">轉換計算</span>
+                    <span className="text-[10px] text-[#5F5F68] font-bold tracking-widest uppercase">轉換計算</span>
                     <p className="text-sm font-bold text-black mt-1">
                       ${item.rawPrice}/{item.unit} ÷ {rule.yieldRate}% = ${previewCost.toFixed(2)}/{item.unit} ÷ {rConv}{rUnit} = <span className="text-emerald-600">${previewRecipeCost < 1 ? previewRecipeCost.toFixed(4) : previewRecipeCost.toFixed(2)}/{rUnit}</span>
                     </p>
                   </div>
                 )}
 
-                <div className="mt-6 pt-6 border-t border-neutral-100 flex justify-between items-center">
-                  <span className="text-xs font-bold text-[#7F7F7F] tracking-widest uppercase flex items-center gap-2">
+                <div className="mt-6 pt-6 border-t border-[#B4B4BE] flex justify-between items-center">
+                  <span className="text-xs font-bold text-[#5F5F68] tracking-widest uppercase flex items-center gap-2">
                     <div className="p-1.5 bg-neutral-100 rounded-full"><Scale size={14} className="text-black"/></div>
                     配方單位成本
                   </span>
@@ -821,7 +777,7 @@ export default function App() {
             );
           })}
           {filteredSettingsProducts.length === 0 && (
-             <div className="col-span-full text-center py-24 text-[#7F7F7F] font-medium rounded-[32px] bg-[#F5F5F5]">
+             <div className="col-span-full text-center py-24 text-[#5F5F68] font-medium rounded-[32px] bg-[#F5F5F5]">
                 找不到相符的項目。
              </div>
           )}
@@ -831,331 +787,474 @@ export default function App() {
   };
 
   const renderSetMenuTab = () => {
-    if (editingMenu) {
-      let totalIngredientsCost = 0;
-      
-      const updatedCategories = (editingMenu.categories || []).map(cat => {
-        const updatedItems = (cat.items || []).map(ig => {
-           const latestInfo = findIngredient(ig);
-           const rCost = latestInfo.recipeCost || latestInfo.finalCost || 0;
-           const rUnit = latestInfo.recipeUnit || latestInfo.unit;
-           totalIngredientsCost += rCost * ig.qty;
-           return { ...ig, recipeCost: rCost, recipeUnit: rUnit, finalCost: latestInfo.finalCost, vendorName: latestInfo.vendorName || ig.vendorName };
-        });
-        return { ...cat, items: updatedItems };
-      });
+    const fmtMoney = (v) => `$${v.toFixed(2)}`;
+    const fmtUnitCost = (v) => (v < 1 ? v.toFixed(4) : v.toFixed(2));
+    // 單品資訊：優先取食材成本的最新值；來源被刪除時沿用當初加入時的成本
+    const resolveItem = (it) => {
+      const calc = costCalcs.find(c => c.id === it.costCalcId);
+      const live = calc ? calcCost(calc.price, calc.weight, calc.yieldRate, calc.taxRate) : null;
+      return {
+        name: calc ? calc.menuName : it.itemName,
+        store: calc ? calc.storeName : it.storeName,
+        unit: calc ? calc.weightUnit : it.recipeUnit,
+        unitCost: live !== null ? live : (it.recipeCost || 0),
+        missing: !calc
+      };
+    };
+    const lineCostOf = (it) => resolveItem(it).unitCost * (parseFloat(it.qty) || 0);
+    const categoryCostOf = (cat) => (cat.items || []).reduce((sum, it) => sum + lineCostOf(it), 0);
 
-      const taxAmount = (editingMenu.sellingPrice || 0) * (globalSettings.taxRate / 100);
-      const totalCost = totalIngredientsCost + taxAmount;
-      const margin = editingMenu.sellingPrice > 0 ? (((editingMenu.sellingPrice - totalCost) / editingMenu.sellingPrice) * 100).toFixed(1) : 0;
+    const updateCategory = (catId, patch) => setCostCategories(prev => prev.map(c => (c.id === catId ? { ...c, ...patch } : c)));
 
-      const handleAddCategory = () => setEditingMenu({...editingMenu, categories: [...updatedCategories, { id: `cat-${Date.now()}`, name: '未命名分類', items: [] }]});
-      const handleUpdateCategoryName = (catId, newName) => setEditingMenu({...editingMenu, categories: updatedCategories.map(c => c.id === catId ? { ...c, name: newName } : c)});
-      const handleRemoveCategory = (catId) => setEditingMenu({...editingMenu, categories: updatedCategories.filter(c => c.id !== catId)});
-      const handleAddIngredientToCategory = (catId, selectedId) => {
-         if (!selectedId) return;
-         const ing = allAvailableIngredients.find(i => i.id === selectedId);
-         if (ing) setEditingMenu({...editingMenu, categories: updatedCategories.map(c => c.id === catId ? { ...c, items: [...c.items, { id: `ig-${Date.now()}`, itemId: ing.id, itemCode: ing.code || '', itemName: ing.name, vendorName: ing.vendorName, recipeCost: ing.recipeCost, qty: 1, recipeUnit: ing.recipeUnit }] } : c)});
+    const handleAddCategory = () => {
+      const name = newCategoryName.trim();
+      if (!name) { showNotice('error', '請輸入分類名稱。'); return; }
+      if (costCategories.some(c => c.name === name)) { showNotice('error', '已有同名分類。'); return; }
+      setCostCategories(prev => [...prev, { id: `cc-${newUid()}`, name, items: [] }]);
+      setNewCategoryName('');
+      setShowNewCategory(false);
+      showNotice('success', `已新增分類「${name}」，點擊卡片即可新增單品。`);
+    };
+
+    const handleDeleteCategory = (cat) => {
+      if (!window.confirm(`確定要刪除分類「${cat.name}」嗎？\n其中 ${(cat.items || []).length} 項單品也會一併刪除。`)) return;
+      setCostCategories(prev => prev.filter(c => c.id !== cat.id));
+      if (openCategoryId === cat.id) { setOpenCategoryId(null); setAddingItem(null); }
+    };
+
+    // ---------- 分類詳細頁 ----------
+    const openCat = costCategories.find(c => c.id === openCategoryId);
+    if (openCat) {
+      const calcForAdd = addingItem ? costCalcs.find(c => c.id === addingItem.calcId) : null;
+      const addUnitCost = calcForAdd ? calcCost(calcForAdd.price, calcForAdd.weight, calcForAdd.yieldRate, calcForAdd.taxRate) : null;
+      const addWeight = addingItem ? parseFloat(addingItem.weight) : NaN;
+      const addLineCost = addUnitCost !== null && addWeight > 0 ? addUnitCost * addWeight : null;
+
+      const handleAddItem = () => {
+        if (!calcForAdd || addLineCost === null) return;
+        setCostCategories(prev => prev.map(c => c.id === openCat.id ? { ...c, items: [...c.items, { id: `ci-${newUid()}`, costCalcId: calcForAdd.id, itemName: calcForAdd.menuName, storeName: calcForAdd.storeName, recipeCost: addUnitCost, recipeUnit: calcForAdd.weightUnit, qty: addWeight }] } : c));
+        setAddingItem(null);
       };
-      const handleUpdateIngredientQty = (catId, igId, newQty) => setEditingMenu({...editingMenu, categories: updatedCategories.map(c => c.id === catId ? { ...c, items: c.items.map(i => i.id === igId ? { ...i, qty: newQty } : i) } : c)});
-      const handleUpdateIngredientUnit = (catId, igId, newUnit) => {
-        // 找到對應食材，根據新單位重新計算 recipeCost
-        const ing = allAvailableIngredients.find(a => {
-          const item = updatedCategories.flatMap(c => c.items).find(i => i.id === igId);
-          return item && ((item.itemCode && a.code === item.itemCode) || a.name === item.itemName);
-        });
-        const baseCostPerPurchaseUnit = ing ? (ing.finalCost || ing.rawPrice || 0) : 0;
-        const rule = ing ? (productRules[ing.name] || { recipeConversion: 1, recipeUnit: ing.unit }) : { recipeConversion: 1, recipeUnit: newUnit };
-        // 配方單位成本 = 進貨成本 / 轉換數
-        const recipeCost = rule.recipeConversion > 1 ? baseCostPerPurchaseUnit / rule.recipeConversion : baseCostPerPurchaseUnit;
-        setEditingMenu({...editingMenu, categories: updatedCategories.map(c => c.id === catId ? { ...c, items: c.items.map(i => i.id === igId ? { ...i, recipeUnit: newUnit, recipeCost } : i) } : c)});
-      };
-      const handleRemoveIngredient = (catId, igId) => setEditingMenu({...editingMenu, categories: updatedCategories.map(c => c.id === catId ? { ...c, items: c.items.filter(i => i.id !== igId) } : c)});
-      const handleSaveMenu = () => {
-        const menuToSave = { ...editingMenu, categories: updatedCategories };
-        if (setMenus.find(m => m.id === editingMenu.id)) setSetMenus(setMenus.map(m => m.id === editingMenu.id ? menuToSave : m));
-        else setSetMenus([...setMenus, menuToSave]);
-        setEditingMenu(null);
-      };
+      const handleQty = (itemId, value) => updateCategory(openCat.id, { items: openCat.items.map(i => i.id === itemId ? { ...i, qty: value === '' ? '' : (parseFloat(value) || 0) } : i) });
+      const handleRemoveItem = (itemId) => updateCategory(openCat.id, { items: openCat.items.filter(i => i.id !== itemId) });
+
+      const fieldCls = 'w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all h-[52px]';
+      const labelCls = 'block text-xs font-bold text-[#5F5F68] mb-2 tracking-widest uppercase';
+      const sortedCalcs = [...costCalcs].sort((a, b) => a.menuName.localeCompare(b.menuName, 'zh-Hant') || b.month.localeCompare(a.month));
 
       return (
         <div className="animate-in fade-in slide-in-from-right-4 duration-300 pb-24 md:pb-8">
-          <button onClick={() => setEditingMenu(null)} className="flex items-center text-[#7F7F7F] hover:text-black font-bold mb-8 transition-all w-fit">
+          <button onClick={() => { setOpenCategoryId(null); setAddingItem(null); }} className="flex items-center text-[#5F5F68] hover:text-black font-bold mb-8 transition-all w-fit">
             <div className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center mr-3 border border-neutral-100"><ChevronLeft className="w-4 h-4" /></div>
-            返回商品列表
+            返回分類列表
           </button>
-          
-          <div className="bg-white rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 overflow-hidden mb-8 flex flex-col">
-            <div className="bg-black p-8 flex flex-col md:flex-row md:items-center justify-between gap-6">
-              <div className="flex-1 w-full">
-                 <span className="text-[#7F7F7F] text-xs font-bold uppercase tracking-widest mb-2 block">商品名稱</span>
-                 <input 
-                   type="text" value={editingMenu.name} onChange={e => setEditingMenu({...editingMenu, name: e.target.value})} 
-                   className="bg-transparent text-white border-b border-neutral-800 hover:border-neutral-600 focus:border-white px-0 py-2 font-black text-3xl w-full outline-none transition-colors placeholder-neutral-700 tracking-tight"
-                   placeholder="輸入商品名稱..."
-                 />
-              </div>
-              <div className="bg-neutral-900 p-5 rounded-[24px] border border-neutral-800 flex items-center gap-4 shrink-0">
-                <span className="text-[#7F7F7F] font-bold text-xs uppercase tracking-widest">終端售價</span>
-                <div className="flex items-center text-white">
-                  <DollarSign className="w-6 h-6 opacity-50" />
-                  <input 
-                    type="number" value={editingMenu.sellingPrice} onChange={e => setEditingMenu({...editingMenu, sellingPrice: parseFloat(e.target.value)||0})} 
-                    className="bg-transparent text-white font-black text-4xl w-32 outline-none"
-                  />
-                </div>
-              </div>
+
+          <div className="bg-[#DEDEE4] rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] p-6 md:p-8 mb-8 flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="flex-1 min-w-0">
+              <span className="text-[#5F5F68] text-xs font-bold uppercase tracking-widest mb-2 block">分類名稱</span>
+              <input
+                type="text" value={openCat.name} aria-label="分類名稱"
+                onChange={(e) => updateCategory(openCat.id, { name: e.target.value })}
+                onBlur={() => { if (!openCat.name.trim()) updateCategory(openCat.id, { name: '未命名分類' }); }}
+                className="bg-transparent text-black border-b border-neutral-200 hover:border-neutral-400 focus:border-black px-0 py-2 font-black text-3xl w-full outline-none transition-colors tracking-tight"
+                placeholder="輸入分類名稱..."
+              />
             </div>
+            <div className="bg-black rounded-[24px] px-8 py-5 shrink-0">
+              <span className="block text-[10px] text-neutral-500 font-bold uppercase tracking-widest mb-1">商品成本</span>
+              <span className="text-4xl font-black text-white">{fmtMoney(categoryCostOf(openCat))}</span>
+            </div>
+          </div>
 
-            <div className="p-6 md:p-8 bg-white flex-1">
-              <div className="flex justify-between items-end mb-8">
-                <div>
-                  <h3 className="font-black text-black text-2xl tracking-tight">配方結構建構器</h3>
-                </div>
-                <button onClick={handleAddCategory} className="flex items-center gap-2 bg-[#F5F5F5] hover:bg-neutral-200 text-black px-5 py-3 rounded-full font-bold text-sm transition-all whitespace-nowrap">
-                   <FolderPlus size={16} /> 新增分類
-                </button>
+          <div className="flex items-center justify-between mb-5">
+            <h3 className="font-black text-black text-xl tracking-tight">單品 <span className="text-[#5F5F68] text-sm font-bold ml-2">共 {openCat.items.length} 項</span></h3>
+            <button onClick={() => setAddingItem(addingItem ? null : { calcId: '', weight: '' })} className="flex items-center gap-2 bg-black hover:bg-neutral-800 text-white px-5 py-3 rounded-full font-bold text-sm shadow-[0_10px_20px_rgba(0,0,0,0.1)] transition-all whitespace-nowrap">
+              <Plus size={14} strokeWidth={3} /> 新增單品
+            </button>
+          </div>
+
+          {addingItem && (
+            <div className="bg-[#DEDEE4] rounded-[24px] p-6 mb-5 border border-[#B4B4BE] shadow-[0_12px_32px_rgba(0,0,0,0.22)]">
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="font-black text-black text-lg">新增單品</h4>
+                <button onClick={() => setAddingItem(null)} aria-label="關閉" className="w-8 h-8 flex items-center justify-center bg-[#F5F5F5] rounded-full text-black hover:bg-neutral-200 transition-colors"><X size={14} /></button>
               </div>
-
-              <div className="space-y-8">
-                {updatedCategories.map((cat) => {
-                  const catSubtotal = (cat.items || []).reduce((sum, ig) => sum + ((ig.recipeCost || 0) * ig.qty), 0);
-                  return (
-                  <div key={cat.id} className="bg-[#F5F5F5] rounded-[24px] p-6">
-                     <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 mb-6">
-                        <div className="flex items-center gap-3 flex-1 flex-wrap">
-                           <input 
-                             type="text" value={cat.name} onChange={(e) => handleUpdateCategoryName(cat.id, e.target.value)}
-                             className="bg-transparent border-b border-transparent hover:border-neutral-300 focus:border-black outline-none font-black text-xl text-black px-1 py-1 w-full sm:max-w-[250px] transition-colors"
-                             placeholder="分類名稱..."
-                           />
-                           <div className="ml-3 px-3 py-1.5 bg-white rounded-full text-xs font-bold text-[#7F7F7F] flex items-center gap-2 shadow-sm">
-                             小計 <span className="text-black font-black text-sm">${catSubtotal.toFixed(1)}</span>
-                           </div>
-                        </div>
-                        <div className="flex items-center gap-3 xl:justify-end">
-                           <div className="flex items-center bg-white p-1.5 rounded-full shadow-sm">
-                              <select 
-                                value={ingredientCategoryFilters[cat.id] || ''} onChange={(e) => setIngredientCategoryFilters({...ingredientCategoryFilters, [cat.id]: e.target.value})}
-                                className="bg-transparent text-[#7F7F7F] font-bold px-3 py-2 outline-none cursor-pointer text-sm border-r border-neutral-100"
-                              >
-                                <option value="">全部分類</option>
-                                {availableCategories.filter(c => c !== '全部').map(c => <option key={c} value={c}>{c}</option>)}
-                              </select>
-                              <select 
-                                onChange={(e) => { handleAddIngredientToCategory(cat.id, e.target.value); e.target.value=''; }} defaultValue="" 
-                                className="bg-transparent text-black font-black px-3 py-2 outline-none cursor-pointer text-sm w-full sm:w-[180px] truncate"
-                              >
-                                <option value="" disabled>+ 新增單品...</option>
-                                {allAvailableIngredients.filter(ing => ingredientCategoryFilters[cat.id] ? ing.categoryName === ingredientCategoryFilters[cat.id] : true).map(ing => (
-                                  <option key={ing.id} value={ing.id}>{ing.code ? `[${ing.code}] ` : ''}{ing.name} (${ing.recipeCost < 1 ? ing.recipeCost.toFixed(4) : ing.recipeCost.toFixed(1)}/{ing.recipeUnit})</option>
-                                ))}
-                              </select>
-                           </div>
-                           <button onClick={() => handleRemoveCategory(cat.id)} className="w-10 h-10 flex items-center justify-center text-neutral-400 hover:text-black bg-white rounded-full shadow-sm transition-colors">
-                              <Trash2 size={16} />
-                           </button>
-                        </div>
-                     </div>
-
-                     <div className="space-y-3">
-                        {cat.items.map((ig) => (
-                           <div key={ig.id} className="flex flex-col sm:flex-row sm:items-center justify-between bg-white p-4 rounded-[16px] gap-4 shadow-sm border border-transparent hover:border-neutral-200 transition-colors">
-                             <div className="flex-1 flex items-center gap-4">
-                               <div className="w-10 h-10 rounded-full bg-[#F5F5F5] flex items-center justify-center">
-                                 <Tag size={14} className="text-black"/>
-                               </div>
-                               <div>
-                                 <h4 className="font-black text-black text-base leading-none mb-1.5">{ig.itemCode && <span className="text-emerald-600 mr-1.5">[{ig.itemCode}]</span>}{ig.itemName}</h4>
-                                 <p className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">{ig.vendorName} • ${(ig.recipeCost || 0) < 1 ? (ig.recipeCost || 0).toFixed(4) : (ig.recipeCost || 0).toFixed(2)}/{ig.recipeUnit}</p>
-                               </div>
-                             </div>
-                             
-                             <div className="flex items-center gap-3 sm:justify-end flex-wrap">
-                               <div className="flex items-center bg-[#F5F5F5] rounded-full overflow-hidden focus-within:ring-2 focus-within:ring-black">
-                                 <input 
-                                   type="number" step="0.01" min="0" value={ig.qty} onChange={e => handleUpdateIngredientQty(cat.id, ig.id, parseFloat(e.target.value) || 0)}
-                                   className="w-16 px-3 py-2.5 text-center font-black text-black bg-transparent outline-none text-sm"
-                                 />
-                                 <select 
-                                   value={ig.recipeUnit || '件'}
-                                   onChange={e => handleUpdateIngredientUnit(cat.id, ig.id, e.target.value)}
-                                   className="bg-transparent text-[#7F7F7F] font-bold text-xs outline-none pr-3 py-2.5 cursor-pointer"
-                                 >
-                                   <option value="g">g</option>
-                                   <option value="kg">kg</option>
-                                   <option value="台斤">台斤</option>
-                                   <option value="斤">斤</option>
-                                   <option value="個">個</option>
-                                   <option value="片">片</option>
-                                   <option value="份">份</option>
-                                   <option value="包">包</option>
-                                   <option value="盒">盒</option>
-                                   <option value="箱">箱</option>
-                                   <option value="瓶">瓶</option>
-                                   <option value="ml">ml</option>
-                                   <option value="L">L</option>
-                                   <option value="件">件</option>
-                                 </select>
-                               </div>
-                               
-                               <div className="w-20 text-right">
-                                 <span className="font-black text-black text-lg">${((ig.recipeCost||0) * ig.qty).toFixed(1)}</span>
-                               </div>
-
-                               <button onClick={() => handleRemoveIngredient(cat.id, ig.id)} className="text-neutral-400 hover:text-black transition-colors p-2">
-                                 <Trash2 size={16} />
-                               </button>
-                             </div>
-                           </div>
-                        ))}
-                        {cat.items.length === 0 && (
-                           <div className="text-center py-6 border border-dashed border-neutral-300 rounded-[16px] text-[#7F7F7F] font-bold text-sm bg-transparent">
-                             此分類尚無食材
-                           </div>
-                        )}
-                     </div>
+              {costCalcs.length === 0 ? (
+                <div className="text-center py-6 bg-[#F5F5F5] rounded-[16px]">
+                  <p className="text-[#5F5F68] font-bold text-sm mb-3">「{texts.tabIngredients}」還沒有儲存任何項目。</p>
+                  <button onClick={() => { setAddingItem(null); setCurrentTab('ingredients'); }} className="bg-black hover:bg-neutral-800 text-white px-5 py-2.5 rounded-full font-bold text-sm transition-all">前往「{texts.tabIngredients}」試算</button>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-[2fr_1fr] gap-4">
+                    <div>
+                      <label className={labelCls}>單品（來自{texts.tabIngredients}）</label>
+                      <select value={addingItem.calcId} onChange={(e) => setAddingItem({ ...addingItem, calcId: e.target.value })} className={fieldCls} aria-label="選擇單品">
+                        <option value="" disabled>選擇單品...</option>
+                        {sortedCalcs.map(c => {
+                          const cc = calcCost(c.price, c.weight, c.yieldRate, c.taxRate);
+                          return <option key={c.id} value={c.id}>{c.menuName}（{c.storeName}・{c.month}）{cc === null ? '' : ` $${fmtUnitCost(cc)}/${c.weightUnit}`}</option>;
+                        })}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelCls}>重量{calcForAdd && <span className="normal-case">（{calcForAdd.weightUnit}）</span>}</label>
+                      <input type="number" min="0" step="any" value={addingItem.weight} disabled={!calcForAdd} onChange={(e) => setAddingItem({ ...addingItem, weight: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') handleAddItem(); }} placeholder="例如 100" className={`${fieldCls} disabled:opacity-40 disabled:cursor-not-allowed`} aria-label="重量" />
+                    </div>
                   </div>
-                )})}
-                {updatedCategories.length === 0 && (
-                  <div className="text-center py-20 bg-[#F5F5F5] rounded-[24px]">
-                     <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm"><Layers size={24} className="text-black" /></div>
-                     <p className="text-black font-black text-xl mb-4 tracking-tight">尚未建立任何分類</p>
-                     <button onClick={handleAddCategory} className="bg-black text-white px-6 py-3 rounded-full font-bold transition-all shadow-[0_10px_20px_rgba(0,0,0,0.08)] hover:bg-neutral-800">
-                        新增第一個分類
-                     </button>
+                  <div className="mt-4 bg-[#111111] rounded-[16px] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <span className="block text-[10px] text-neutral-500 font-bold uppercase tracking-widest mb-1">計算式　單品 × 重量</span>
+                      <p className="text-sm font-bold text-neutral-300 break-words">{addLineCost === null ? '請選擇單品並輸入重量。' : `$${fmtUnitCost(addUnitCost)}/${calcForAdd.weightUnit} × ${addWeight}${calcForAdd.weightUnit}`}</p>
+                    </div>
+                    <div className="sm:text-right shrink-0">
+                      <span className="block text-[10px] text-neutral-500 font-bold uppercase tracking-widest mb-1">商品成本</span>
+                      <span className="text-2xl font-black text-white">{addLineCost === null ? '—' : fmtMoney(addLineCost)}</span>
+                    </div>
                   </div>
-                )}
-              </div>
+                  <div className="flex justify-end gap-3 mt-4">
+                    <button onClick={() => setAddingItem(null)} className="bg-[#F5F5F5] hover:bg-neutral-200 text-black px-6 py-2.5 rounded-full font-bold text-sm transition-all">取消</button>
+                    <button onClick={handleAddItem} disabled={addLineCost === null} className="bg-black hover:bg-neutral-800 disabled:bg-[#F5F5F5] disabled:text-neutral-400 disabled:cursor-not-allowed text-white px-6 py-2.5 rounded-full font-bold text-sm transition-all">加入</button>
+                  </div>
+                </>
+              )}
             </div>
+          )}
 
-            <div className="bg-[#F5F5F5] p-6 md:p-8 flex flex-col xl:flex-row justify-between items-center gap-6 rounded-b-[32px]">
-              <div className="flex gap-6 sm:gap-10 w-full xl:w-auto flex-wrap">
-                <div>
-                  <span className="block text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest mb-1">食材總成本</span>
-                  <span className="text-2xl font-black text-black">${totalIngredientsCost.toFixed(1)}</span>
+          <div className="space-y-3">
+            {openCat.items.map(it => {
+              const info = resolveItem(it);
+              const line = info.unitCost * (parseFloat(it.qty) || 0);
+              return (
+                <div key={it.id} className="flex flex-col sm:flex-row sm:items-center justify-between bg-white p-4 rounded-[16px] gap-4 shadow-[0_6px_18px_rgba(0,0,0,0.14)] border border-[#B4B4BE] hover:border-[#71717A] transition-colors">
+                  <div className="flex-1 min-w-0 flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-full bg-[#F5F5F5] flex items-center justify-center shrink-0"><Tag size={14} className="text-black" /></div>
+                    <div className="min-w-0">
+                      <h4 className="font-black text-black text-base leading-none mb-1.5 truncate">{info.name}</h4>
+                      <p className="text-[10px] text-[#5F5F68] font-bold tracking-wide">{info.store} • ${fmtUnitCost(info.unitCost)}/{info.unit}{info.missing ? '（來源已刪除，沿用原成本）' : ''}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 sm:justify-end flex-wrap">
+                    <div className="flex items-center bg-[#F5F5F5] rounded-full overflow-hidden focus-within:ring-2 focus-within:ring-black">
+                      <input type="number" min="0" step="any" value={it.qty} onChange={(e) => handleQty(it.id, e.target.value)} onBlur={() => { if (it.qty === '') handleQty(it.id, '0'); }} aria-label={`${info.name} 重量`} className="w-20 px-3 py-2.5 text-center font-black text-black bg-transparent outline-none text-sm" />
+                      <span className="text-[#5F5F68] font-bold text-xs pr-4">{info.unit}</span>
+                    </div>
+                    <div className="min-w-[96px] text-right">
+                      <span className="block text-[10px] text-[#5F5F68] font-bold tracking-widest">商品成本</span>
+                      <span className="font-black text-black text-lg">{fmtMoney(line)}</span>
+                    </div>
+                    <button onClick={() => handleRemoveItem(it.id)} title="刪除單品" className="text-neutral-400 hover:text-red-500 transition-colors p-2"><Trash2 size={16} /></button>
+                  </div>
                 </div>
-                <div>
-                  <span className="block text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest mb-1">營業稅 ({globalSettings.taxRate}%)</span>
-                  <span className="text-2xl font-black text-black">${taxAmount.toFixed(1)}</span>
-                </div>
-                <div className="pl-6 sm:pl-10 border-l border-neutral-300">
-                  <span className="block text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest mb-1">總成本 (含稅)</span>
-                  <span className="text-2xl font-black text-black">${totalCost.toFixed(1)}</span>
-                </div>
-                <div>
-                  <span className="block text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest mb-1">預估毛利率</span>
-                  <span className={`text-2xl font-black ${margin >= 60 ? 'text-black' : margin >= 40 ? 'text-neutral-500' : 'text-red-500'}`}>
-                    {margin}%
-                  </span>
-                </div>
-              </div>
-              <button onClick={handleSaveMenu} className="w-full xl:w-auto bg-black hover:bg-neutral-800 text-white px-10 py-4 rounded-full font-bold text-lg shadow-[0_10px_20px_rgba(0,0,0,0.1)] transition-all flex items-center justify-center gap-2">
-                儲存商品配方
-              </button>
-            </div>
+              );
+            })}
+            {openCat.items.length === 0 && !addingItem && (
+              <div className="text-center py-12 border border-dashed border-neutral-300 rounded-[20px] text-[#5F5F68] font-bold text-sm">此分類尚無單品，請點「新增單品」</div>
+            )}
           </div>
         </div>
       );
     }
 
-    const filteredMenus = menuCategoryFilter === '全部' ? setMenus : setMenus.filter(m => m.menuCategory === menuCategoryFilter);
-
+    // ---------- 分類卡片列表 ----------
     return (
       <div className="animate-in fade-in duration-500 pb-24 md:pb-8">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 mb-6">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 mb-8">
           <div>
             <h2 className="text-3xl font-black text-black tracking-tight">{texts.tabSetMenus}</h2>
-            <p className="text-[#7F7F7F] font-medium text-sm mt-2 tracking-wide">管理組合商品結構與毛利。</p>
+            <p className="text-[#5F5F68] font-medium text-sm mt-2 tracking-wide">建立分類卡片，點入後新增單品並計算商品成本。</p>
           </div>
-          <button 
-            onClick={() => setEditingMenu({ id: `sm-${Date.now()}`, name: '未命名新商品', menuCategory: '', sellingPrice: 0, categories: [] })}
-            className="bg-black hover:bg-neutral-800 text-white px-6 py-3.5 rounded-full font-bold text-sm flex items-center gap-2 shadow-[0_10px_20px_rgba(0,0,0,0.1)] transition-all shrink-0"
-          >
-            <Plus size={16} strokeWidth={3} /> 新增商品
+          <button onClick={() => setShowNewCategory(!showNewCategory)} className="bg-black hover:bg-neutral-800 text-white px-6 py-3.5 rounded-full font-bold text-sm flex items-center gap-2 shadow-[0_10px_20px_rgba(0,0,0,0.1)] transition-all shrink-0">
+            <FolderPlus size={16} /> 新增分類
           </button>
         </div>
 
-        {/* 分類篩選 */}
-        {menuCategoryList.length > 1 && (
-          <div className="flex flex-wrap gap-2 mb-6">
-            {menuCategoryList.map(cat => (
-              <button key={cat} onClick={() => setMenuCategoryFilter(cat)}
-                className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${menuCategoryFilter === cat ? 'bg-black text-white' : 'bg-[#F5F5F5] text-[#7F7F7F] hover:bg-neutral-200'}`}>
-                {cat}
-              </button>
-            ))}
+        {showNewCategory && (
+          <div className="bg-[#DEDEE4] p-6 rounded-[24px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] mb-8">
+            <label className="block text-xs font-bold text-[#5F5F68] mb-3 tracking-widest uppercase">分類名稱</label>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <input
+                type="text" value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} autoFocus
+                onKeyDown={(e) => { if (e.key === 'Enter') handleAddCategory(); }}
+                placeholder="輸入分類名稱，例如：肉類" aria-label="新分類名稱"
+                className="flex-1 min-w-0 bg-white border border-[#B4B4BE] rounded-full px-5 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all"
+              />
+              <div className="flex gap-3">
+                <button onClick={() => { setShowNewCategory(false); setNewCategoryName(''); }} className="bg-[#F5F5F5] hover:bg-neutral-200 text-black px-6 py-3 rounded-full font-bold text-sm transition-all">取消</button>
+                <button onClick={handleAddCategory} className="bg-black hover:bg-neutral-800 text-white px-6 py-3 rounded-full font-bold text-sm transition-all">建立</button>
+              </div>
+            </div>
           </div>
         )}
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
-          {filteredMenus.map(menu => {
-            let totalIngredientsCost = 0; let totalItemsCount = 0;
-            (menu.categories || []).forEach(cat => {
-               (cat.items || []).forEach(ig => {
-                  const latestInfo = findIngredient(ig);
-                  totalIngredientsCost += (latestInfo.recipeCost || latestInfo.finalCost || 0) * ig.qty;
-                  totalItemsCount += 1;
-               });
-            });
-            const taxAmount = (menu.sellingPrice || 0) * (globalSettings.taxRate / 100);
-            const totalCost = totalIngredientsCost + taxAmount;
-            const margin = menu.sellingPrice > 0 ? (((menu.sellingPrice - totalCost) / menu.sellingPrice) * 100).toFixed(1) : 0;
-            
-            return (
-              <div key={menu.id} className="bg-white rounded-3xl p-6 shadow-[0_4px_24px_rgba(0,0,0,0.04)] border border-neutral-100 flex flex-col hover:shadow-[0_8px_32px_rgba(0,0,0,0.08)] transition-all group">
-                <div className="flex justify-between items-start mb-4">
-                  <div className="w-10 h-10 bg-[#F5F5F5] rounded-xl flex items-center justify-center"><Utensils size={18} className="text-black" strokeWidth={1.5}/></div>
-                  <div className="flex gap-1">
-                    <button onClick={() => setEditingMenu(menu)} className="p-2 text-neutral-300 hover:text-black hover:bg-[#F5F5F5] rounded-xl transition-colors"><Edit2 size={15} /></button>
-                    <button onClick={() => setSetMenus(prev => prev.filter(m => m.id !== menu.id))} className="p-2 text-neutral-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={15} /></button>
+        {costCategories.length === 0 ? (
+          <div className="text-center py-24 bg-[#F5F5F5] rounded-[32px]">
+            <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm"><Layers size={24} className="text-black" /></div>
+            <p className="text-black font-black text-xl mb-2 tracking-tight">尚未建立任何分類</p>
+            <p className="text-[#5F5F68] font-medium text-sm">點擊右上角「新增分類」開始建立。</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-5">
+            {costCategories.map(cat => (
+              <div key={cat.id} className="relative group">
+                <button onClick={() => { setOpenCategoryId(cat.id); setAddingItem(null); }} aria-label={`開啟分類 ${cat.name}`} className="w-full text-left bg-[#DEDEE4] rounded-3xl p-6 shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] hover:shadow-[0_18px_44px_rgba(0,0,0,0.32)] hover:-translate-y-0.5 hover:border-[#71717A] transition-all flex flex-col">
+                  <div className="w-10 h-10 bg-white shadow-sm rounded-xl flex items-center justify-center mb-4"><Utensils size={18} className="text-black" strokeWidth={1.5} /></div>
+                  <h3 className="text-lg font-black text-black mb-1 tracking-tight truncate pr-10">{cat.name}</h3>
+                  <p className="text-xs font-bold text-[#52525B] mb-5">{(cat.items || []).length} 項單品</p>
+                  <div className="pt-4 border-t border-[#B4B4BE] flex items-center justify-between">
+                    <span className="text-xs font-bold text-[#52525B]">點擊查看商品成本</span>
+                    <ChevronRight size={18} className="text-neutral-400 group-hover:text-black transition-colors" />
                   </div>
-                </div>
-                <h3 className="text-lg font-black text-black mb-1 tracking-tight truncate">{menu.name}</h3>
-                {/* 分類標籤 — 可點擊編輯 */}
-                <div className="mb-4 pb-4 border-b border-neutral-100">
-                  <select
-                    value={menu.menuCategory || ''}
-                    onChange={e => {
-                      if (e.target.value === '__new__') {
-                        const newCat = prompt('請輸入新分類名稱：');
-                        if (newCat && newCat.trim()) setSetMenus(prev => prev.map(m => m.id === menu.id ? { ...m, menuCategory: newCat.trim() } : m));
-                      } else {
-                        setSetMenus(prev => prev.map(m => m.id === menu.id ? { ...m, menuCategory: e.target.value } : m));
-                      }
-                    }}
-                    className="text-[11px] font-bold text-[#9CA3AF] bg-[#F5F5F5] rounded-lg px-2 py-1 outline-none cursor-pointer hover:bg-neutral-200 transition-colors border-0"
-                  >
-                    <option value="">未分類</option>
-                    {menuCategoryList.filter(c => c !== '全部').map(c => <option key={c} value={c}>{c}</option>)}
-                    <option value="__new__">+ 新增分類...</option>
-                  </select>
-                  <span className="text-[11px] font-bold text-neutral-400 ml-2">{totalItemsCount} 項食材</span>
-                </div>
-                
-                <div className="mt-auto space-y-3">
-                  <div className="flex justify-between items-center">
-                    <span className="text-[11px] text-[#9CA3AF] font-bold">終端售價</span>
-                    <span className="font-black text-black">${menu.sellingPrice}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-[11px] text-[#9CA3AF] font-bold">總成本</span>
-                    <span className="font-black text-black">${totalCost.toFixed(1)}</span>
-                  </div>
-                  <div className="flex justify-between items-center bg-[#F5F5F5] px-4 py-3 rounded-2xl">
-                    <span className="text-[11px] text-[#9CA3AF] font-bold">毛利率</span>
-                    <span className={`font-black text-lg ${margin >= 60 ? 'text-black' : margin >= 40 ? 'text-neutral-500' : 'text-red-500'}`}>{margin}%</span>
-                  </div>
-                </div>
+                </button>
+                <button onClick={() => handleDeleteCategory(cat)} title="刪除分類" className="absolute top-4 right-4 p-2 text-neutral-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={15} /></button>
               </div>
-            );
-          })}
-          {setMenus.length === 0 && (
-            <div className="col-span-full text-center py-24 text-[#7F7F7F] font-medium rounded-[32px] bg-[#F5F5F5]">
-              目前尚未建立任何商品配方。
-            </div>
-          )}
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderMonthlyPriceTab = () => {
+    const [yy, mm] = selectedMonth.split('-');
+    const shiftMonth = (delta) => {
+      const d = new Date(parseInt(yy, 10), parseInt(mm, 10) - 1 + delta, 1);
+      setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    };
+    const categoryOf = (m) => m.menuCategory || '未分類';
+    const categoryOptions = Array.from(new Set(setMenus.map(categoryOf)));
+    const menuOptions = setMenus.filter(m => categoryOf(m) === mpForm.category);
+    const monthRecords = monthlyPrices.filter(r => r.month === selectedMonth);
+
+    const handleAddStore = () => {
+      const name = newStoreName.trim();
+      if (!name) { showNotice('error', '請輸入門店名稱。'); return; }
+      if (stores.some(st => st.name === name)) { showNotice('error', '已有同名門店。'); return; }
+      const store = { id: newUid(), name };
+      setStores(prev => [...prev, store]);
+      setMpForm({ storeId: store.id, category: '', menuId: '', price: '' });
+      setNewStoreName('');
+      showNotice('success', `已新增門店「${name}」。`);
+    };
+
+    const handleDeleteStore = (store) => {
+      const count = monthlyPrices.filter(r => r.storeId === store.id).length;
+      if (!window.confirm(`確定要刪除門店「${store.name}」嗎？${count > 0 ? `\n該門店共 ${count} 筆每月售價紀錄也會一併刪除。` : ''}`)) return;
+      setStores(prev => prev.filter(st => st.id !== store.id));
+      setMonthlyPrices(prev => prev.filter(r => r.storeId !== store.id));
+      if (mpForm.storeId === store.id) setMpForm({ storeId: '', category: '', menuId: '', price: '' });
+    };
+
+    const isNewCategory = mpForm.category === '__new__';
+    const isNewMenu = isNewCategory || mpForm.menuId === '__new__';
+    const resolvedCategory = isNewCategory ? (mpForm.newCategory || '').trim() : mpForm.category;
+    const resolvedMenuName = isNewMenu ? (mpForm.newMenuName || '').trim() : '';
+    const canSave = !!mpForm.storeId && !!resolvedCategory && (isNewMenu ? !!resolvedMenuName : !!mpForm.menuId) && mpForm.price !== '';
+
+    const handleSavePrice = () => {
+      const price = parseFloat(mpForm.price);
+      if (!mpForm.storeId) { showNotice('error', '請先選擇門店。'); return; }
+      if (!resolvedCategory) { showNotice('error', '請選擇或輸入分類。'); return; }
+      if (isNewMenu && !resolvedMenuName) { showNotice('error', '請輸入商品名稱。'); return; }
+      if (!isNewMenu && !mpForm.menuId) { showNotice('error', '請選擇商品。'); return; }
+      if (mpForm.price === '' || isNaN(price) || price < 0) { showNotice('error', '請輸入正確的售價。'); return; }
+
+      // 取得商品；若是新商品就在這裡直接建立（同分類下同名則沿用既有商品，避免重複）
+      let menu = isNewMenu ? setMenus.find(m => categoryOf(m) === resolvedCategory && m.name === resolvedMenuName) : setMenus.find(m => m.id === mpForm.menuId);
+      if (!menu) {
+        menu = { id: `sm-${newUid()}`, name: resolvedMenuName, menuCategory: resolvedCategory === '未分類' ? '' : resolvedCategory, sellingPrice: 0, categories: [] };
+        setSetMenus(prev => [...prev, menu]);
+      }
+      if (!menu) return;
+
+      const existing = monthlyPrices.find(r => r.month === selectedMonth && r.storeId === mpForm.storeId && r.menuId === menu.id);
+      if (existing) {
+        setMonthlyPrices(prev => prev.map(r => r.id === existing.id ? { ...r, price, menuName: menu.name, category: categoryOf(menu) } : r));
+        showNotice('success', `已更新「${menu.name}」${yy} 年 ${parseInt(mm, 10)} 月的售價。`);
+      } else {
+        setMonthlyPrices(prev => [...prev, { id: newUid(), month: selectedMonth, storeId: mpForm.storeId, menuId: menu.id, menuName: menu.name, category: categoryOf(menu), price }]);
+        showNotice('success', `已登錄「${menu.name}」$${price}。`);
+      }
+      // 保留門店與分類，方便連續輸入同分類的下一個商品
+      setMpForm({ storeId: mpForm.storeId, category: resolvedCategory, newCategory: '', menuId: '', newMenuName: '', price: '' });
+    };
+
+    const handleChangeRecordPrice = (id, value) => {
+      setMonthlyPrices(prev => prev.map(r => r.id === id ? { ...r, price: value === '' ? '' : (parseFloat(value) || 0) } : r));
+    };
+    const handleBlurRecordPrice = (id) => {
+      setMonthlyPrices(prev => prev.map(r => r.id === id && r.price === '' ? { ...r, price: 0 } : r));
+    };
+    const handleDeleteRecord = (rec, productName) => {
+      if (!window.confirm(`確定要刪除「${productName}」這筆售價紀錄嗎？`)) return;
+      setMonthlyPrices(prev => prev.filter(r => r.id !== rec.id));
+    };
+
+    const selectCls = 'w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed';
+    const labelCls = 'block text-xs font-bold text-[#5F5F68] mb-2 tracking-widest uppercase';
+
+    return (
+      <div className="animate-in fade-in duration-500 pb-24 md:pb-8">
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
+          <div>
+            <h2 className="text-3xl font-black text-black tracking-tight">{texts.tabMonthlyPrice || '每月售價'}</h2>
+            <p className="text-[#5F5F68] font-medium text-sm mt-2 tracking-wide">依門店登錄每個月的商品售價金額。</p>
+          </div>
+          <div className="flex items-center gap-2 bg-white rounded-full border border-[#B4B4BE] shadow-[0_8px_24px_rgba(0,0,0,0.16)] p-1.5 self-start sm:self-auto">
+            <button onClick={() => shiftMonth(-1)} aria-label="上個月" className="w-10 h-10 flex items-center justify-center rounded-full bg-[#F5F5F5] hover:bg-neutral-200 text-black transition-colors"><ChevronLeft size={16} /></button>
+            <input
+              type="month" value={selectedMonth} aria-label="選擇月份"
+              onChange={(e) => e.target.value && setSelectedMonth(e.target.value)}
+              className="bg-transparent font-black text-black text-sm outline-none px-2 text-center"
+            />
+            <button onClick={() => shiftMonth(1)} aria-label="下個月" className="w-10 h-10 flex items-center justify-center rounded-full bg-[#F5F5F5] hover:bg-neutral-200 text-black transition-colors"><ChevronRight size={16} /></button>
+          </div>
         </div>
+
+        {/* 門店管理 */}
+        <div className="bg-[#DEDEE4] p-6 md:p-8 rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] mb-8">
+          <h3 className="font-black text-lg text-black mb-5 flex items-center gap-3">
+            <div className="p-2 bg-white rounded-full"><Store size={20} className="text-black" /></div>
+            門店
+          </h3>
+          <div className="flex flex-wrap gap-2 mb-5">
+            {stores.map(st => (
+              <span key={st.id} className="inline-flex items-center gap-1 bg-white border border-[#B4B4BE] text-black font-bold text-sm pl-4 pr-1.5 py-1.5 rounded-full">
+                {st.name}
+                <button onClick={() => handleDeleteStore(st)} aria-label={`刪除門店 ${st.name}`} className="w-7 h-7 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><X size={14} /></button>
+              </span>
+            ))}
+            {stores.length === 0 && <span className="text-[#5F5F68] font-bold text-sm py-2">尚未建立門店，請先新增第一間門店。</span>}
+          </div>
+          <div className="flex gap-3 max-w-md">
+            <input
+              type="text" value={newStoreName} onChange={(e) => setNewStoreName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleAddStore(); }}
+              placeholder="輸入門店名稱..."
+              className="flex-1 min-w-0 bg-white border border-[#B4B4BE] rounded-full px-5 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all text-sm"
+            />
+            <button onClick={handleAddStore} className="bg-black hover:bg-neutral-800 text-white px-5 py-3 rounded-full font-bold text-sm flex items-center gap-2 transition-all shrink-0"><Plus size={16} strokeWidth={3} /> 新增門店</button>
+          </div>
+        </div>
+
+        {/* 登錄售價：門店 → 分類 → 商品 → 售價 */}
+        <div className="bg-[#DEDEE4] p-6 md:p-8 rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] mb-8">
+          <h3 className="font-black text-lg text-black mb-6 flex items-center gap-3">
+            <div className="p-2 bg-white rounded-full"><CalendarDays size={20} className="text-black" /></div>
+            登錄 {yy} 年 {parseInt(mm, 10)} 月售價
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-5 gap-5 items-start">
+            <div>
+              <label className={labelCls}>1. 門店</label>
+              <select value={mpForm.storeId} onChange={(e) => setMpForm({ storeId: e.target.value, category: '', newCategory: '', menuId: '', newMenuName: '', price: '' })} className={selectCls}>
+                <option value="" disabled>選擇門店...</option>
+                {stores.map(st => <option key={st.id} value={st.id}>{st.name}</option>)}
+              </select>
+              {stores.length === 0 && <p className="text-[11px] text-[#5F5F68] font-bold mt-2">請先在上方新增門店</p>}
+            </div>
+            <div>
+              <label className={labelCls}>2. 分類</label>
+              <select
+                value={mpForm.category} disabled={!mpForm.storeId}
+                onChange={(e) => setMpForm({ ...mpForm, category: e.target.value, newCategory: '', menuId: e.target.value === '__new__' ? '__new__' : '', newMenuName: '', price: '' })}
+                className={selectCls}
+              >
+                <option value="" disabled>選擇分類...</option>
+                {categoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                <option value="__new__">+ 新增分類...</option>
+              </select>
+              {isNewCategory && (
+                <input type="text" value={mpForm.newCategory || ''} onChange={(e) => setMpForm({ ...mpForm, newCategory: e.target.value })} placeholder="輸入新分類名稱" autoFocus className={`${selectCls} mt-2`} />
+              )}
+            </div>
+            <div>
+              <label className={labelCls}>3. 商品</label>
+              <select
+                value={isNewCategory ? '__new__' : mpForm.menuId} disabled={!mpForm.category || isNewCategory}
+                onChange={(e) => setMpForm({ ...mpForm, menuId: e.target.value, newMenuName: '', price: '' })}
+                className={selectCls}
+              >
+                <option value="" disabled>選擇商品...</option>
+                {menuOptions.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                <option value="__new__">+ 新增商品...</option>
+              </select>
+              {isNewMenu && (
+                <input type="text" value={mpForm.newMenuName || ''} onChange={(e) => setMpForm({ ...mpForm, newMenuName: e.target.value })} placeholder="輸入新商品名稱" className={`${selectCls} mt-2`} />
+              )}
+            </div>
+            <div>
+              <label className={labelCls}>4. 售價 ($)</label>
+              <input
+                type="number" min="0" step="1" value={mpForm.price} disabled={isNewMenu ? !resolvedMenuName : !mpForm.menuId}
+                onChange={(e) => setMpForm({ ...mpForm, price: e.target.value })}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSavePrice(); }}
+                placeholder="0" className={selectCls}
+              />
+            </div>
+            <div className="2xl:pt-[26px]">
+              <button onClick={handleSavePrice} disabled={!canSave} className="w-full bg-black hover:bg-neutral-800 disabled:bg-[#F5F5F5] disabled:text-neutral-400 disabled:cursor-not-allowed text-white px-6 py-3.5 rounded-full font-bold text-sm flex items-center justify-center gap-2 transition-all">
+                <Save size={16} /> 登錄售價
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* 當月紀錄 */}
+        <h3 className="text-xl font-black text-black tracking-tight mb-5">{yy} 年 {parseInt(mm, 10)} 月售價紀錄 <span className="text-[#5F5F68] text-sm font-bold ml-2">共 {monthRecords.length} 筆</span></h3>
+        {monthRecords.length === 0 ? (
+          <div className="text-center py-20 text-[#5F5F68] font-medium rounded-[32px] bg-[#F5F5F5]">這個月還沒有登錄任何售價。</div>
+        ) : (
+          <div className="space-y-6">
+            {stores.map(st => {
+              const rows = monthRecords.filter(r => r.storeId === st.id).sort((a, b) => (a.category || '').localeCompare(b.category || '', 'zh-Hant') || (a.menuName || '').localeCompare(b.menuName || '', 'zh-Hant'));
+              if (rows.length === 0) return null;
+              return (
+                <div key={st.id} className="bg-white rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] overflow-hidden">
+                  <div className="px-6 py-4 border-b border-neutral-100 flex items-center justify-between">
+                    <span className="flex items-center gap-3 font-black text-black"><Store size={16} /> {st.name}</span>
+                    <span className="text-xs font-bold text-[#5F5F68]">{rows.length} 項商品</span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="border-b border-neutral-100">
+                          <th className="px-6 py-3 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest">分類</th>
+                          <th className="px-6 py-3 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest">商品</th>
+                          <th className="px-6 py-3 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">售價</th>
+                          <th className="px-3 py-3 w-12"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map(r => {
+                          const live = setMenus.find(m => m.id === r.menuId);
+                          const productName = live ? live.name : r.menuName;
+                          return (
+                            <tr key={r.id} className="border-b border-neutral-50 hover:bg-[#F9F9F9] transition-colors">
+                              <td className="px-6 py-3"><span className="text-xs font-bold text-[#5F5F68] bg-[#F5F5F5] px-3 py-1 rounded-full">{live ? categoryOf(live) : r.category}</span></td>
+                              <td className="px-6 py-3 font-black text-black text-sm">{productName}</td>
+                              <td className="px-6 py-3 text-right">
+                                <span className="text-[#6B6B76] text-sm mr-0.5">$</span>
+                                <input
+                                  type="number" min="0" value={r.price} aria-label={`${productName} 售價`}
+                                  onChange={(e) => handleChangeRecordPrice(r.id, e.target.value)}
+                                  onBlur={() => handleBlurRecordPrice(r.id)}
+                                  className="font-black text-black text-base bg-transparent outline-none w-20 text-right focus:bg-[#F5F5F5] rounded-lg px-1 py-0.5 transition-colors"
+                                />
+                              </td>
+                              <td className="px-3 py-3 text-right">
+                                <button onClick={() => handleDeleteRecord(r, productName)} title="刪除" className="p-2 text-neutral-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={15} /></button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   };
@@ -1188,20 +1287,20 @@ export default function App() {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 mb-8">
           <div>
             <h2 className="text-3xl font-black text-black tracking-tight">{texts.tabSellingPrice || '售價金額'}</h2>
-            <p className="text-[#7F7F7F] font-medium text-sm mt-2 tracking-wide">依食材成本百分比，自動推算建議售價。</p>
+            <p className="text-[#5F5F68] font-medium text-sm mt-2 tracking-wide">依食材成本百分比，自動推算建議售價。</p>
           </div>
         </div>
 
         {/* 公式與參數設定卡片 */}
-        <div className="bg-white rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 p-6 md:p-8 mb-8">
+        <div className="bg-[#DEDEE4] rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] p-6 md:p-8 mb-8">
           <div className="flex flex-col lg:flex-row lg:items-center gap-6 lg:gap-10">
             <div className="flex-1">
-              <span className="block text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest mb-3">售價公式</span>
+              <span className="block text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest mb-3">售價公式</span>
               <div className="bg-[#F5F5F5] rounded-[20px] p-4 sm:p-5 flex flex-wrap items-center gap-2 sm:gap-3 text-base sm:text-lg font-black text-black tracking-tight">
                 <span>售價</span>
-                <span className="text-[#7F7F7F] font-medium">=</span>
+                <span className="text-[#5F5F68] font-medium">=</span>
                 <span className="text-sm sm:text-lg">食材成本</span>
-                <span className="text-[#7F7F7F] font-medium">÷</span>
+                <span className="text-[#5F5F68] font-medium">÷</span>
                 <div className="inline-flex items-center bg-white rounded-xl border border-neutral-200 shadow-sm px-2 sm:px-3 py-1.5">
                   <input
                     type="number" value={foodCostPercent}
@@ -1209,20 +1308,20 @@ export default function App() {
                     className="bg-transparent outline-none font-black text-black w-14 sm:w-16 text-center text-base sm:text-lg"
                     step="0.01" min="0" max="100"
                   />
-                  <span className="text-[#7F7F7F] font-bold text-sm sm:text-base">%</span>
+                  <span className="text-[#5F5F68] font-bold text-sm sm:text-base">%</span>
                 </div>
               </div>
             </div>
             <div className="flex flex-col items-center bg-[#F5F5F5] rounded-[20px] sm:rounded-[24px] p-4 sm:p-5 lg:px-8 shrink-0">
-              <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest mb-1">成本佔比</span>
+              <span className="text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest mb-1">成本佔比</span>
               <span className="text-3xl sm:text-4xl font-black text-black">{foodCostPercent}%</span>
-              <span className="text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest mt-1">倍率 ×{multiplier.toFixed(2)}</span>
+              <span className="text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest mt-1">倍率 ×{multiplier.toFixed(2)}</span>
             </div>
           </div>
           <div className="flex flex-wrap gap-2 mt-5">
             {[{label: '高利潤 (25%)', val: 25}, {label: '標準 (33.33%)', val: 33.33}, {label: '薄利 (40%)', val: 40}, {label: '極薄利 (50%)', val: 50}].map(preset => (
               <button key={preset.val} onClick={() => setFoodCostPercent(preset.val)}
-                className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${foodCostPercent === preset.val ? 'bg-black text-white shadow-[0_10px_20px_rgba(0,0,0,0.1)]' : 'bg-[#F5F5F5] text-[#7F7F7F] hover:bg-neutral-200 hover:text-black'}`}>
+                className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${foodCostPercent === preset.val ? 'bg-black text-white shadow-[0_10px_20px_rgba(0,0,0,0.1)]' : 'bg-[#F5F5F5] text-[#5F5F68] hover:bg-neutral-200 hover:text-black'}`}>
                 {preset.label}
               </button>
             ))}
@@ -1241,21 +1340,20 @@ export default function App() {
                 const costRatio = menu.sellingPrice > 0 ? (menu.totalIngredientsCost / menu.sellingPrice * 100) : 0;
                 const isOverBudget = costRatio > foodCostPercent;
                 return (
-                <div key={menu.id} className="bg-white rounded-3xl shadow-[0_4px_24px_rgba(0,0,0,0.04)] border border-neutral-100 overflow-hidden hover:shadow-[0_8px_32px_rgba(0,0,0,0.08)] transition-all">
+                <div key={menu.id} className="bg-[#DEDEE4] rounded-3xl shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] overflow-hidden hover:shadow-[0_18px_44px_rgba(0,0,0,0.32)] transition-all">
                   {/* 卡片頂部 */}
                   <div className="px-6 pt-6 pb-4 flex justify-between items-start">
                     <div className="flex-1 min-w-0 mr-3">
                       <h4 className="text-lg font-black text-black tracking-tight truncate">{menu.name}</h4>
-                      <p className="text-xs text-[#9CA3AF] font-bold mt-1">食材成本 <span className="text-black">${menu.totalIngredientsCost.toFixed(1)}</span></p>
+                      <p className="text-xs text-[#6B6B76] font-bold mt-1">食材成本 <span className="text-black">${menu.totalIngredientsCost.toFixed(1)}</span></p>
                     </div>
                     <div className="flex gap-1 shrink-0">
-                      <button onClick={() => { setEditingMenu(menu); setCurrentTab('setMenus'); }} className="p-2 text-neutral-300 hover:text-black hover:bg-[#F5F5F5] rounded-xl transition-colors"><Edit2 size={15} /></button>
                       <button onClick={() => setSetMenus(prev => prev.filter(m => m.id !== menu.id))} className="p-2 text-neutral-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={15} /></button>
                     </div>
                   </div>
 
                   {/* 建議售價 — 主視覺 */}
-                  <div className="mx-5 bg-[#111] rounded-2xl px-5 py-4 flex justify-between items-center">
+                  <div className="mx-5 bg-[#111111] rounded-2xl px-5 py-4 flex justify-between items-center">
                     <span className="text-xs text-neutral-500 font-bold shrink-0">建議售價</span>
                     <div className="text-right min-w-0">
                       <span className="text-2xl font-black text-white">${menu.roundedPrice}</span>
@@ -1266,9 +1364,9 @@ export default function App() {
                   {/* 底部資訊 */}
                   <div className="px-6 py-4 space-y-3">
                     <div className="flex justify-between items-center">
-                      <span className="text-[11px] text-[#9CA3AF] font-bold">終端售價</span>
+                      <span className="text-[11px] text-[#6B6B76] font-bold">終端售價</span>
                       <div className="flex items-center">
-                        <span className="text-[#9CA3AF] text-sm mr-0.5">$</span>
+                        <span className="text-[#6B6B76] text-sm mr-0.5">$</span>
                         <input 
                           type="number" min="0" value={menu.sellingPrice || 0}
                           onChange={e => setSetMenus(prev => prev.map(m => m.id === menu.id ? { ...m, sellingPrice: parseFloat(e.target.value) || 0 } : m))}
@@ -1278,7 +1376,7 @@ export default function App() {
                     </div>
                     {menu.sellingPrice > 0 && (
                       <div className="flex justify-between items-center">
-                        <span className="text-[11px] text-[#9CA3AF] font-bold">食材佔比</span>
+                        <span className="text-[11px] text-[#6B6B76] font-bold">食材佔比</span>
                         <span className={`text-sm font-black ${isOverBudget ? 'text-red-500' : 'text-emerald-600'}`}>
                           {costRatio.toFixed(1)}%
                         </span>
@@ -1298,15 +1396,15 @@ export default function App() {
             <div className="w-8 h-8 bg-black rounded-full flex items-center justify-center"><Scale size={14} className="text-white" /></div>
             食材單位售價參考
           </h3>
-          <div className="bg-white rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 overflow-hidden">
+          <div className="bg-white rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left">
                 <thead>
                   <tr className="border-b border-neutral-100">
-                    <th className="px-6 py-4 text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">食材名稱</th>
-                    <th className="px-6 py-4 text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest">分類</th>
-                    <th className="px-6 py-4 text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest text-right">食材成本</th>
-                    <th className="px-6 py-4 text-[10px] text-[#7F7F7F] font-bold uppercase tracking-widest text-right">建議售價</th>
+                    <th className="px-6 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest">食材名稱</th>
+                    <th className="px-6 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest">分類</th>
+                    <th className="px-6 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">食材成本</th>
+                    <th className="px-6 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">建議售價</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1317,20 +1415,20 @@ export default function App() {
                           {item.code && <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 shrink-0">{item.code}</span>}
                           <div>
                             <span className="font-black text-black text-sm">{item.name}</span>
-                            <span className="block text-[10px] text-[#7F7F7F] font-bold mt-0.5">{item.vendorName}</span>
+                            <span className="block text-[10px] text-[#5F5F68] font-bold mt-0.5">{item.vendorName}</span>
                           </div>
                         </div>
                       </td>
                       <td className="px-6 py-4">
-                        <span className="text-xs font-bold text-[#7F7F7F] bg-[#F5F5F5] px-3 py-1 rounded-full">{item.categoryName}</span>
+                        <span className="text-xs font-bold text-[#5F5F68] bg-[#F5F5F5] px-3 py-1 rounded-full">{item.categoryName}</span>
                       </td>
                       <td className="px-6 py-4 text-right">
                         <span className="font-black text-black">${typeof item.finalCost === 'number' ? item.finalCost.toFixed(1) : item.finalCost}</span>
-                        <span className="text-xs text-[#7F7F7F] font-medium ml-1">/{item.unit}</span>
+                        <span className="text-xs text-[#5F5F68] font-medium ml-1">/{item.unit}</span>
                       </td>
                       <td className="px-6 py-4 text-right">
                         <span className="font-black text-black text-lg">${item.suggestedPrice.toFixed(1)}</span>
-                        <span className="text-xs text-[#7F7F7F] font-medium ml-1">/{item.unit}</span>
+                        <span className="text-xs text-[#5F5F68] font-medium ml-1">/{item.unit}</span>
                       </td>
                     </tr>
                   ))}
@@ -1338,7 +1436,7 @@ export default function App() {
               </table>
             </div>
             {ingredientPricingData.length === 0 && (
-              <div className="text-center py-16 text-[#7F7F7F] font-medium">
+              <div className="text-center py-16 text-[#5F5F68] font-medium">
                 尚無食材資料，請先到「食材成本」新增食材。
               </div>
             )}
@@ -1349,131 +1447,288 @@ export default function App() {
   };
 
   const renderIngredientsTab = () => {
-    // 以名稱重新取得最新資料，避免編輯後畫面仍是舊資料
-    const currentCategory = selectedCategory ? erpData.find(c => c.category === selectedCategory.category) : null;
-    const currentVendor = currentCategory && selectedVendor ? currentCategory.vendors.find(v => v.vendorName === selectedVendor.vendorName) : null;
+    const storeNameOf = (id) => (stores.find(st => st.id === id) || {}).name || '（已刪除的門店）';
+    const fmtMonth = (m) => { const [y, mo] = m.split('-'); return `${y} 年 ${parseInt(mo, 10)} 月`; };
+    const productNameOf = (r) => (setMenus.find(m => m.id === r.menuId) || {}).name || r.menuName;
+    const fmtCost = (v) => (v < 1 ? v.toFixed(4) : v.toFixed(2));
 
-    if (searchQuery.trim() !== '') {
-      return (
-        <div className="pb-24 md:pb-8">
-          <h2 className="text-[#7F7F7F] text-sm font-bold mb-6 flex items-center gap-2 uppercase tracking-widest">
-            <Search className="w-4 h-4" /> 搜尋結果： "{searchQuery}" ({searchResults.length})
-          </h2>
-          {searchResults.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {searchResults.map(item => <IngredientCard key={item.id + item.uid} item={item} categoryName={item.categoryName} vendorName={item.vendorName} onEdit={openEditIngredient} onDelete={handleDeleteIngredient} />)}
-            </div>
-          ) : (
-            <div className="text-center py-24 bg-white rounded-[32px] border border-neutral-100">
-              <div className="w-16 h-16 bg-[#F5F5F5] rounded-full flex items-center justify-center mx-auto mb-4"><Package className="w-6 h-6 text-black" strokeWidth={1.5}/></div>
-              <p className="text-[#7F7F7F] font-bold">找不到相關食材</p>
-            </div>
-          )}
-        </div>
-      );
-    }
+    const monthChoices = Array.from(new Set(monthlyPrices.map(r => r.month))).sort().reverse();
+    const pickable = monthlyPrices
+      .filter(r => (!costMonthFilter || r.month === costMonthFilter) && (!costStoreFilter || r.storeId === costStoreFilter))
+      .sort((a, b) => b.month.localeCompare(a.month) || productNameOf(a).localeCompare(productNameOf(b), 'zh-Hant'));
+    const picked = monthlyPrices.find(r => r.id === costPickId) || null;
+    const savedForPicked = picked ? costCalcs.find(c => c.recordId === picked.id) : null;
 
-    if (selectedVendor && currentVendor && currentCategory) {
-      return (
-        <div className="animate-in fade-in slide-in-from-right-4 duration-300 pb-24 md:pb-8">
-          <div className="flex items-center gap-3 mb-8 text-xs font-bold uppercase tracking-widest">
-            <button onClick={() => { setSelectedVendor(null); setSelectedCategory(null); }} className="text-[#7F7F7F] hover:text-black transition-colors">分類總覽</button>
-            <span className="text-neutral-300">/</span>
-            <button onClick={() => setSelectedVendor(null)} className="text-[#7F7F7F] hover:text-black transition-colors">{currentCategory.category}</button>
-            <span className="text-neutral-300">/</span>
-            <span className="text-black">{currentVendor.vendorName}</span>
-          </div>
-          
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-10 bg-white p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100">
-            <div className="flex items-center">
-              <div className="w-16 h-16 bg-[#F5F5F5] rounded-full flex items-center justify-center mr-6 shrink-0"><Store className="w-6 h-6 text-black" strokeWidth={1.5} /></div>
-              <div>
-                <h2 className="text-3xl font-black text-black tracking-tight">{currentVendor.vendorName}</h2>
-                <p className="text-sm font-bold text-[#7F7F7F] mt-1">提供 {currentVendor.items.length} 項供應食材</p>
-              </div>
-            </div>
-            <button onClick={() => openNewIngredient({ category: currentCategory.category, vendor: currentVendor.vendorName })} className="bg-black hover:bg-neutral-800 text-white px-6 py-3.5 rounded-full font-bold text-sm flex items-center justify-center gap-2 shadow-[0_10px_20px_rgba(0,0,0,0.1)] transition-all shrink-0">
-              <Plus size={16} strokeWidth={3} /> 新增食材
-            </button>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {currentVendor.items.map(item => <IngredientCard key={item.id + item.uid} item={item} onEdit={openEditIngredient} onDelete={handleDeleteIngredient} />)}
-          </div>
-        </div>
-      );
-    }
+    const num = (v) => (v === '' || v === null || v === undefined ? NaN : parseFloat(v));
+    const price = num(costForm.price);
+    const weight = num(costForm.weight);
+    const yieldPct = num(costForm.yieldRate);
+    const taxPct = num(costForm.taxRate);
+    const unit = (costForm.weightUnit || '').trim() || '單位';
+    const result = calcCost(price, weight, yieldPct, taxPct);
 
-    if (selectedCategory && currentCategory) {
-      return (
-        <div className="animate-in fade-in slide-in-from-right-4 duration-300 pb-24 md:pb-8">
-          <button onClick={() => setSelectedCategory(null)} className="flex items-center text-[#7F7F7F] hover:text-black font-bold mb-8 transition-all w-fit">
-             <div className="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center mr-3 border border-neutral-100"><ChevronLeft className="w-4 h-4" /></div>
-             返回食材分類
-          </button>
-          
-          <div className="flex items-center mb-10">
-            <div className={`w-20 h-20 rounded-full flex items-center justify-center bg-white shadow-[0_10px_30px_rgba(0,0,0,0.05)] border border-neutral-100 mr-6`}>
-              {getIconByCategory(currentCategory.category)}
-            </div>
-            <div>
-              <h2 className="text-3xl font-black text-black tracking-tight">{currentCategory.category}</h2>
-              <p className="text-sm font-bold text-[#7F7F7F] mt-1 uppercase tracking-widest">請選擇進貨廠商</p>
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-            {currentCategory.vendors.map((vendor, idx) => (
-              <button 
-                key={idx} onClick={() => setSelectedVendor(vendor)}
-                className="bg-white p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100 hover:shadow-[0_20px_40px_rgba(0,0,0,0.06)] hover:border-black transition-all group text-left flex flex-col justify-between"
-              >
-                <div className="flex items-start justify-between mb-8">
-                  <div className="w-12 h-12 bg-[#F5F5F5] rounded-full flex items-center justify-center group-hover:bg-black transition-colors"><Store className="w-5 h-5 text-black group-hover:text-white" strokeWidth={1.5} /></div>
-                  <div className="bg-[#F5F5F5] text-[#7F7F7F] text-[10px] font-bold px-3 py-1.5 rounded-full uppercase tracking-widest">{currentCategory.category}</div>
-                </div>
-                <div>
-                  <h3 className="text-2xl font-black text-black mb-2 tracking-tight">{vendor.vendorName}</h3>
-                  <p className="text-sm text-[#7F7F7F] font-bold pt-4 flex items-center justify-between">
-                    {vendor.items.length} 項食材 <ChevronRight size={16} className="text-neutral-300 group-hover:translate-x-1 group-hover:text-black transition-all"/>
-                  </p>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      );
-    }
+    const handlePick = (r) => {
+      setCostPickId(r.id);
+      const saved = costCalcs.find(c => c.recordId === r.id);
+      setCostForm(saved
+        ? { price: saved.price, weight: saved.weight, weightUnit: saved.weightUnit, yieldRate: saved.yieldRate, yieldNote: saved.yieldNote || '', taxRate: saved.taxRate }
+        : { price: r.price, weight: '', weightUnit: 'g', yieldRate: '', yieldNote: '', taxRate: globalSettings.taxRate });
+    };
+
+    const handleSaveCalc = () => {
+      if (!picked || result === null) { showNotice('error', '請完整輸入售價、重量、耗損與營業稅。'); return; }
+      const entry = {
+        id: savedForPicked ? savedForPicked.id : newUid(), recordId: picked.id,
+        menuName: productNameOf(picked), category: picked.category, storeName: storeNameOf(picked.storeId), month: picked.month,
+        price, weight, weightUnit: unit, yieldRate: yieldPct, yieldNote: (costForm.yieldNote || '').trim(), taxRate: taxPct
+      };
+      setCostCalcs(prev => savedForPicked ? prev.map(c => c.id === entry.id ? entry : c) : [...prev, entry]);
+      showNotice('success', `已儲存「${entry.menuName}」的食材成本。`);
+    };
+
+    const handleDeleteCalc = (c) => {
+      if (!window.confirm(`確定要刪除「${c.menuName}」的食材成本試算嗎？`)) return;
+      setCostCalcs(prev => prev.filter(x => x.id !== c.id));
+    };
+
+    const inputCls = 'w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all';
+    const labelCls = 'block text-xs font-bold text-[#5F5F68] mb-2 tracking-widest uppercase';
+    const setField = (key, value) => setCostForm({ ...costForm, [key]: value });
+    // 單位清單：目前選用但已不在清單內的單位（例如舊紀錄）仍會顯示
+    const unitList = Array.from(new Set([...units, costForm.weightUnit].filter(Boolean)));
+
+    const handleAddUnit = () => {
+      const name = unitPanel.newName.trim();
+      if (!name) { showNotice('error', '請輸入單位名稱。'); return; }
+      if (!units.includes(name)) {
+        setUnits(prev => [...prev, name]);
+        showNotice('success', `已新增單位「${name}」。`);
+      }
+      setCostForm({ ...costForm, weightUnit: name });
+      setUnitPanel({ ...unitPanel, newName: '' });
+    };
+
+    const handleRenameUnit = (oldName) => {
+      const input = window.prompt('請輸入新的單位名稱：', oldName);
+      if (input === null) return;
+      const name = input.trim();
+      if (!name || name === oldName) return;
+      if (units.includes(name)) { showNotice('error', '已有同名單位。'); return; }
+      setUnits(prev => prev.map(u => (u === oldName ? name : u)));
+      setCostCalcs(prev => prev.map(c => (c.weightUnit === oldName ? { ...c, weightUnit: name } : c)));
+      if (costForm.weightUnit === oldName) setCostForm({ ...costForm, weightUnit: name });
+    };
+
+    const handleDeleteUnit = (name) => {
+      if (units.length <= 1) { showNotice('error', '至少要保留一個單位。'); return; }
+      if (!window.confirm(`確定要刪除單位「${name}」嗎？已儲存的食材成本不受影響。`)) return;
+      const rest = units.filter(u => u !== name);
+      setUnits(rest);
+      if (costForm.weightUnit === name) setCostForm({ ...costForm, weightUnit: rest[0] });
+    };
 
     return (
       <div className="animate-in fade-in duration-500 pb-24 md:pb-8">
-        <div className="mb-10 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-          <div>
-            <h2 className="text-3xl font-black text-black tracking-tight">{texts.tabIngredients}</h2>
-            <p className="text-[#7F7F7F] font-medium text-sm mt-2 tracking-wide">請選擇食材分類以檢視廠商報價。</p>
-          </div>
-          <button onClick={() => openNewIngredient()} className="bg-black hover:bg-neutral-800 text-white px-6 py-3.5 rounded-full font-bold text-sm flex items-center justify-center gap-2 shadow-[0_10px_20px_rgba(0,0,0,0.1)] transition-all shrink-0">
-            <Plus size={16} strokeWidth={3} /> 新增食材
-          </button>
+        <div className="mb-8">
+          <h2 className="text-3xl font-black text-black tracking-tight">{texts.tabIngredients}</h2>
+          <p className="text-[#5F5F68] font-medium text-sm mt-2 tracking-wide">先選擇「每月售價」登錄的食材，再輸入重量、耗損與營業稅，試算食材成本。</p>
         </div>
-        
-        {erpData.length === 0 ? (
-          <div className="col-span-full text-center py-20 text-[#7F7F7F] font-bold border-2 border-dashed border-neutral-200 rounded-[2rem] bg-white">
-            目前尚未建立任何食材。<br/>請點擊右上角「新增食材」開始建立。
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
-            {erpData.map(category => (
-              <button
-                key={category.id} onClick={() => setSelectedCategory(category)}
-                className={`bg-white border border-neutral-100 p-6 sm:p-8 rounded-[32px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] hover:shadow-[0_20px_40px_rgba(0,0,0,0.06)] transition-all flex flex-col items-center justify-center text-center group`}
-              >
-                <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-6 group-hover:scale-110 transition-transform duration-300 bg-[#F5F5F5]`}>
-                  {getIconByCategory(category.category)}
+
+        {/* 步驟 1：選擇每月售價登錄的食材 */}
+        <div className="bg-[#DEDEE4] p-6 md:p-8 rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] mb-8">
+          <h3 className="font-black text-lg text-black mb-5 flex items-center gap-3">
+            <div className="p-2 bg-[#F5F5F5] rounded-full"><CalendarDays size={20} className="text-black" /></div>
+            1. 選擇食材
+          </h3>
+          {monthlyPrices.length === 0 ? (
+            <div className="text-center py-12 bg-[#F5F5F5] rounded-[24px]">
+              <p className="text-[#5F5F68] font-bold mb-4">「{texts.tabMonthlyPrice || '每月售價'}」還沒有登錄任何食材。</p>
+              <button onClick={() => setCurrentTab('monthlyPrice')} className="bg-black hover:bg-neutral-800 text-white px-6 py-3 rounded-full font-bold text-sm transition-all">前往「{texts.tabMonthlyPrice || '每月售價'}」登錄</button>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-xl mb-5">
+                <div>
+                  <label className={labelCls}>月份</label>
+                  <select value={costMonthFilter} onChange={(e) => setCostMonthFilter(e.target.value)} className={inputCls}>
+                    <option value="">全部月份</option>
+                    {monthChoices.map(m => <option key={m} value={m}>{fmtMonth(m)}</option>)}
+                  </select>
                 </div>
-                <h3 className="font-black text-black text-lg tracking-tight">{category.category}</h3>
-                <p className="text-[10px] text-[#7F7F7F] font-bold mt-3 bg-white px-3 py-1 rounded-full uppercase tracking-widest border border-neutral-100 shadow-sm">{category.vendors.length} 家廠商</p>
+                <div>
+                  <label className={labelCls}>門店</label>
+                  <select value={costStoreFilter} onChange={(e) => setCostStoreFilter(e.target.value)} className={inputCls}>
+                    <option value="">全部門店</option>
+                    {stores.map(st => <option key={st.id} value={st.id}>{st.name}</option>)}
+                  </select>
+                </div>
+              </div>
+              {pickable.length === 0 ? (
+                <p className="text-[#5F5F68] font-bold text-sm py-6">這個條件下沒有任何食材。</p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 max-h-[360px] overflow-y-auto pr-1">
+                  {pickable.map(r => {
+                    const active = r.id === costPickId;
+                    const done = costCalcs.some(c => c.recordId === r.id);
+                    return (
+                      <button
+                        key={r.id} onClick={() => handlePick(r)} aria-pressed={active}
+                        className={`text-left p-4 rounded-[20px] border transition-all ${active ? 'bg-black text-white border-black' : 'bg-white border-neutral-200 hover:border-black'}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="font-black text-base leading-tight">{productNameOf(r)}</span>
+                          <span className="font-black text-base shrink-0">${r.price}</span>
+                        </div>
+                        <p className={`text-[11px] font-bold mt-1.5 ${active ? 'text-neutral-400' : 'text-[#5F5F68]'}`}>
+                          {storeNameOf(r.storeId)} · {r.category} · {fmtMonth(r.month)}
+                        </p>
+                        {done && <span className={`inline-block mt-2 text-[10px] font-black px-2 py-0.5 rounded-full ${active ? 'bg-white text-black' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>已試算</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* 步驟 2：輸入並試算 */}
+        {picked && (
+          <div className="bg-[#DEDEE4] p-6 md:p-8 rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] mb-8">
+            <h3 className="font-black text-lg text-black mb-1 flex items-center gap-3">
+              <div className="p-2 bg-[#F5F5F5] rounded-full"><Calculator size={20} className="text-black" /></div>
+              2. 試算「{productNameOf(picked)}」
+            </h3>
+            <p className="text-xs font-bold text-[#5F5F68] mb-6 ml-12">{storeNameOf(picked.storeId)} · {fmtMonth(picked.month)}</p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 items-start">
+              <div>
+                <label className={labelCls}>售價 ($)</label>
+                <input type="number" min="0" step="any" value={costForm.price} onChange={(e) => setField('price', e.target.value)} className={inputCls} placeholder="0" />
+                <p className="text-[11px] text-[#5F5F68] font-bold mt-2">已帶入每月售價，可自行修改</p>
+              </div>
+              <div className="space-y-5">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label htmlFor="cost-unit" className="text-xs font-bold text-[#5F5F68] tracking-widest uppercase">單位</label>
+                    <button type="button" onClick={() => setUnitPanel({ ...unitPanel, open: !unitPanel.open })} className="text-[11px] font-bold text-[#5F5F68] hover:text-black flex items-center gap-1 transition-colors">
+                      <Edit2 size={12} /> {unitPanel.open ? '完成' : '新增 / 編輯單位'}
+                    </button>
+                  </div>
+                  <select id="cost-unit" value={costForm.weightUnit} onChange={(e) => setField('weightUnit', e.target.value)} className={`${inputCls} h-[52px]`}>
+                    {unitList.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                  {unitPanel.open && (
+                    <div className="mt-3 bg-[#F5F5F5] rounded-[20px] p-4">
+                      <div className="flex flex-wrap gap-2 mb-4">
+                        {units.map(u => (
+                          <span key={u} className="inline-flex items-center bg-white border border-neutral-200 rounded-full pl-3 pr-1 py-1 text-sm font-bold text-black">
+                            {u}
+                            <button type="button" onClick={() => handleRenameUnit(u)} aria-label={`重新命名單位 ${u}`} className="w-6 h-6 flex items-center justify-center rounded-full text-neutral-400 hover:text-black hover:bg-[#F5F5F5] transition-colors"><Edit2 size={12} /></button>
+                            <button type="button" onClick={() => handleDeleteUnit(u)} aria-label={`刪除單位 ${u}`} className="w-6 h-6 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><X size={12} /></button>
+                          </span>
+                        ))}
+                      </div>
+                      <div className="flex gap-2">
+                        <input
+                          type="text" value={unitPanel.newName} onChange={(e) => setUnitPanel({ ...unitPanel, newName: e.target.value })}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleAddUnit(); }}
+                          placeholder="輸入新單位，例如：條" aria-label="新增單位名稱"
+                          className="flex-1 min-w-0 bg-white border border-neutral-200 rounded-full px-4 py-2.5 text-black outline-none focus:ring-2 focus:ring-black font-bold text-sm"
+                        />
+                        <button type="button" onClick={handleAddUnit} className="bg-black hover:bg-neutral-800 text-white px-5 py-2.5 rounded-full font-bold text-sm flex items-center gap-1.5 transition-all shrink-0"><Plus size={14} strokeWidth={3} /> 新增</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <label className={labelCls}>重量</label>
+                  <input type="number" min="0" step="any" value={costForm.weight} onChange={(e) => setField('weight', e.target.value)} className={`${inputCls} h-[52px]`} placeholder="例如 1000" />
+                </div>
+              </div>
+              <div>
+                <label className={labelCls}>耗損 (%)</label>
+                <input type="number" min="0" max="100" step="any" value={costForm.yieldRate} onChange={(e) => setField('yieldRate', e.target.value)} className={inputCls} placeholder="例如 85" />
+                <p className="text-[11px] text-[#5F5F68] font-bold mt-2">填可用比例：85 代表 重量 × 85%</p>
+                <input type="text" value={costForm.yieldNote || ''} onChange={(e) => setField('yieldNote', e.target.value)} className={`${inputCls} mt-3 text-sm`} placeholder="算法說明，例如：去骨後剩 85%" aria-label="耗損算法說明" />
+              </div>
+              <div>
+                <label className={labelCls}>營業稅 (%)</label>
+                <input type="number" min="0" step="any" value={costForm.taxRate} onChange={(e) => setField('taxRate', e.target.value)} className={inputCls} placeholder="例如 5" />
+                <p className="text-[11px] text-[#5F5F68] font-bold mt-2">填 5 代表 × 1.05</p>
+              </div>
+            </div>
+
+            <div className="mt-8 bg-[#111111] rounded-[24px] p-6 flex flex-col md:flex-row md:items-center justify-between gap-5">
+              <div className="min-w-0">
+                <span className="block text-[10px] text-neutral-500 font-bold uppercase tracking-widest mb-2">計算式　售價 ÷（重量 × 耗損）× 營業稅</span>
+                <p className="text-sm font-bold text-neutral-300 break-words">
+                  {result === null
+                    ? '請完整輸入售價、重量、耗損與營業稅（重量與耗損需大於 0）。'
+                    : `$${price} ÷（${weight}${unit} × ${yieldPct}%）× (1 + ${taxPct}%)`}
+                </p>
+              </div>
+              <div className="md:text-right shrink-0">
+                <span className="block text-[10px] text-neutral-500 font-bold uppercase tracking-widest mb-1">食材成本</span>
+                <span className="text-3xl font-black text-white">{result === null ? '—' : <>${fmtCost(result)}<span className="text-sm text-neutral-500 font-medium ml-1">/{unit}</span></>}</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end mt-6">
+              <button onClick={handleSaveCalc} disabled={result === null} className="bg-black hover:bg-neutral-800 disabled:bg-[#F5F5F5] disabled:text-neutral-400 disabled:cursor-not-allowed text-white px-8 py-3.5 rounded-full font-bold text-sm flex items-center gap-2 transition-all">
+                <Save size={16} /> {savedForPicked ? '更新食材成本' : '儲存食材成本'}
               </button>
-            ))}
+            </div>
+          </div>
+        )}
+
+        {/* 已儲存的食材成本 */}
+        <h3 className="text-xl font-black text-black tracking-tight mb-5">已儲存的食材成本 <span className="text-[#5F5F68] text-sm font-bold ml-2">共 {costCalcs.length} 筆</span></h3>
+        {costCalcs.length === 0 ? (
+          <div className="text-center py-16 text-[#5F5F68] font-medium rounded-[32px] bg-[#F5F5F5]">尚未儲存任何食材成本。</div>
+        ) : (
+          <div className="bg-white rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="border-b border-neutral-100">
+                    <th className="px-6 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest">食材</th>
+                    <th className="px-4 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">售價</th>
+                    <th className="px-4 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">重量</th>
+                    <th className="px-4 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">耗損</th>
+                    <th className="px-4 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">營業稅</th>
+                    <th className="px-6 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">食材成本</th>
+                    <th className="px-3 py-4 w-24"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...costCalcs].sort((a, b) => b.month.localeCompare(a.month) || a.menuName.localeCompare(b.menuName, 'zh-Hant')).map(c => {
+                    const cost = calcCost(c.price, c.weight, c.yieldRate, c.taxRate);
+                    const recordAlive = monthlyPrices.some(r => r.id === c.recordId);
+                    return (
+                      <tr key={c.id} className="border-b border-neutral-50 hover:bg-[#F9F9F9] transition-colors">
+                        <td className="px-6 py-4">
+                          <span className="font-black text-black text-sm">{c.menuName}</span>
+                          <span className="block text-[10px] text-[#5F5F68] font-bold mt-0.5">{c.storeName} · {fmtMonth(c.month)}</span>
+                        </td>
+                        <td className="px-4 py-4 text-right font-bold text-black text-sm">${c.price}</td>
+                        <td className="px-4 py-4 text-right font-bold text-black text-sm">{c.weight}{c.weightUnit}</td>
+                        <td className="px-4 py-4 text-right font-bold text-black text-sm">{c.yieldRate}%{c.yieldNote && <span className="block text-[10px] text-[#5F5F68] font-medium mt-0.5 max-w-[160px] ml-auto break-words">{c.yieldNote}</span>}</td>
+                        <td className="px-4 py-4 text-right font-bold text-black text-sm">{c.taxRate}%</td>
+                        <td className="px-6 py-4 text-right">
+                          <span className="font-black text-black text-lg">{cost === null ? '—' : `$${fmtCost(cost)}`}</span>
+                          <span className="text-xs text-[#5F5F68] font-medium ml-1">/{c.weightUnit}</span>
+                        </td>
+                        <td className="px-3 py-4 text-right whitespace-nowrap">
+                          {recordAlive && <button onClick={() => { const r = monthlyPrices.find(x => x.id === c.recordId); if (r) { handlePick(r); window.scrollTo({ top: 0, behavior: 'smooth' }); } }} title="編輯" className="p-2 text-neutral-300 hover:text-black hover:bg-[#F5F5F5] rounded-xl transition-colors"><Edit2 size={15} /></button>}
+                          <button onClick={() => handleDeleteCalc(c)} title="刪除" className="p-2 text-neutral-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={15} /></button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>
@@ -1481,6 +1736,7 @@ export default function App() {
   };
 
   const navItems = [
+    { id: 'monthlyPrice', icon: <CalendarDays size={20} strokeWidth={2} />, label: texts.tabMonthlyPrice || '每月售價' },
     { id: 'ingredients', icon: <Layers size={20} strokeWidth={2} />, label: texts.tabIngredients },
     { id: 'setMenus', icon: <Utensils size={20} strokeWidth={2} />, label: texts.tabSetMenus },
     { id: 'sellingPrice', icon: <Tag size={20} strokeWidth={2} />, label: texts.tabSellingPrice || '售價金額' },
@@ -1499,7 +1755,7 @@ export default function App() {
         </button>
         
         <nav className="flex-1 px-6 space-y-3 mt-4">
-          <p className="px-2 text-[10px] font-bold text-[#7F7F7F] uppercase tracking-[0.2em] mb-4">{texts.sidebarMenu}</p>
+          <p className="px-2 text-[10px] font-bold text-[#5F5F68] uppercase tracking-[0.2em] mb-4">{texts.sidebarMenu}</p>
           {navItems.map(item => (
             <button
               key={item.id}
@@ -1507,7 +1763,7 @@ export default function App() {
               className={`w-full flex items-center gap-4 px-5 py-4 rounded-[20px] font-bold transition-all text-sm tracking-wide ${
                 currentTab === item.id 
                 ? 'bg-black text-white shadow-[0_10px_20px_rgba(0,0,0,0.1)]' 
-                : 'text-[#7F7F7F] hover:bg-[#F5F5F5] hover:text-black'
+                : 'text-[#5F5F68] hover:bg-[#F5F5F5] hover:text-black'
               }`}
             >
               {item.icon}
@@ -1531,7 +1787,7 @@ export default function App() {
         <header className="bg-[#F5F5F5]/80 backdrop-blur-xl sticky top-0 z-30 px-4 py-4 md:px-10 md:py-8">
           <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
             
-            <div className="flex md:hidden justify-between items-center w-full bg-white p-4 rounded-[24px] shadow-[0_10px_30px_rgba(0,0,0,0.03)] border border-neutral-100">
+            <div className="flex md:hidden justify-between items-center w-full bg-white p-4 rounded-[24px] shadow-[0_8px_24px_rgba(0,0,0,0.16)] border border-[#B4B4BE]">
               <button onClick={openUIEditor} className="flex items-center gap-3 w-fit text-left active:scale-95 transition-transform group">
                 <div className="w-8 h-8 bg-black rounded-[10px] flex items-center justify-center shrink-0"><Calculator className="w-4 h-4 text-white" /></div>
                 <div className="flex flex-col">
@@ -1542,14 +1798,14 @@ export default function App() {
             </div>
 
             <div className="flex-1 flex items-center gap-4 w-full justify-between sm:justify-end">
-              {currentTab !== 'settings' && (
+              {currentTab !== 'settings' && currentTab !== 'monthlyPrice' && currentTab !== 'ingredients' && currentTab !== 'setMenus' && (
                 <div className="relative w-full sm:max-w-md">
                   <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
-                    <Search className="h-4 w-4 text-[#7F7F7F]" />
+                    <Search className="h-4 w-4 text-[#5F5F68]" />
                   </div>
                   <input
                     type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-                    className="block w-full pl-12 pr-5 py-3.5 bg-white border border-neutral-100 shadow-[0_10px_30px_rgba(0,0,0,0.03)] rounded-full text-black placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-black transition-all font-bold text-sm"
+                    className="block w-full pl-12 pr-5 py-3.5 bg-white border border-[#B4B4BE] shadow-[0_8px_24px_rgba(0,0,0,0.16)] rounded-full text-black placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-black transition-all font-bold text-sm"
                     placeholder="搜尋食材或分類..."
                   />
                 </div>
@@ -1559,6 +1815,7 @@ export default function App() {
         </header>
 
         <main className="flex-1 p-4 md:px-10 md:pb-10 max-w-6xl mx-auto w-full">
+          {currentTab === 'monthlyPrice' && renderMonthlyPriceTab()}
           {currentTab === 'ingredients' && renderIngredientsTab()}
           {currentTab === 'setMenus' && renderSetMenuTab()}
           {currentTab === 'sellingPrice' && renderSellingPriceTab()}
@@ -1582,65 +1839,8 @@ export default function App() {
       </nav>
 
       {renderUIEditor()}
-      {renderIngredientEditor()}
       {renderToast()}
 
-    </div>
-  );
-}
-
-function IngredientCard({ item, categoryName, vendorName, onEdit, onDelete }) {
-  const hasConversion = item.recipeConversion > 1 && item.recipeUnit !== item.unit;
-  return (
-    <div className="bg-white rounded-3xl border border-neutral-100 shadow-[0_4px_24px_rgba(0,0,0,0.04)] hover:shadow-[0_8px_32px_rgba(0,0,0,0.08)] hover:border-black transition-all overflow-hidden flex flex-col group">
-      {/* 標頭 */}
-      <div className="px-6 pt-6 pb-4">
-        <div className="flex flex-wrap gap-1.5 mb-3">
-          {item.code && <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 tracking-widest">{item.code}</span>}
-          {categoryName && <span className="text-[10px] font-bold text-[#9CA3AF] bg-[#F5F5F5] px-2.5 py-1 rounded-lg">{categoryName}</span>}
-          {vendorName && <span className="text-[10px] font-bold text-[#9CA3AF] bg-[#F5F5F5] px-2.5 py-1 rounded-lg">{vendorName}</span>}
-        </div>
-        <div className="flex items-start justify-between gap-2">
-          <h3 className="text-xl font-black text-black tracking-tight truncate">{item.name}</h3>
-          {item.uid && (onEdit || onDelete) && (
-            <div className="flex gap-1 shrink-0 -mt-1 -mr-2">
-              {onEdit && <button onClick={() => onEdit(item.uid)} className="p-2 text-neutral-300 hover:text-black hover:bg-[#F5F5F5] rounded-xl transition-colors" title="編輯"><Edit2 size={15} /></button>}
-              {onDelete && <button onClick={() => onDelete(item.uid)} className="p-2 text-neutral-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors" title="刪除"><Trash2 size={15} /></button>}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* 進貨單價 */}
-      <div className="px-6 py-3 border-t border-neutral-50">
-        <div className="flex justify-between items-center">
-          <span className="text-[11px] text-[#9CA3AF] font-bold">進貨單價</span>
-          <span className="font-black text-black text-lg">${item.rawPrice} <span className="text-xs text-[#9CA3AF] font-medium">/{item.unit}</span></span>
-        </div>
-      </div>
-      
-      {/* 成本算法 */}
-      <div className="mx-6 my-3 bg-[#F5F5F5] rounded-2xl px-4 py-3">
-        <span className="text-[10px] text-[#9CA3AF] font-bold block mb-1">成本算法</span>
-        <span className="text-black font-bold text-sm">{item.calculation}</span>
-      </div>
-      
-      {/* 成本結果 */}
-      <div className="px-6 pb-6 pt-3 mt-auto space-y-2">
-        {/* 每進貨單位成本 */}
-        <div className="flex justify-between items-center">
-          <span className="text-[11px] text-[#9CA3AF] font-bold">每{item.unit}成本</span>
-          <span className="font-black text-black text-lg">${typeof item.finalCost === 'number' ? item.finalCost.toFixed(1) : item.finalCost} <span className="text-xs text-[#9CA3AF] font-medium">/{item.unit}</span></span>
-        </div>
-
-        {/* 每配方單位成本 (如有轉換) */}
-        {hasConversion && (
-          <div className="flex justify-between items-center bg-[#111] px-4 py-3 rounded-2xl">
-            <span className="text-[11px] text-neutral-400 font-bold">每{item.recipeUnit}成本</span>
-            <span className="font-black text-white text-lg">${item.recipeCost < 1 ? item.recipeCost.toFixed(4) : item.recipeCost.toFixed(2)} <span className="text-xs text-neutral-500 font-medium">/{item.recipeUnit}</span></span>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
