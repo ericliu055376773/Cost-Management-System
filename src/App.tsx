@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, Lock, ChevronLeft, Package, Calculator, DollarSign, Beef, Carrot, Fish, Coffee, CheckCircle, AlertCircle, Utensils, Plus, Trash2, Edit2, Pencil, Check, Layers, ChevronRight, Store, Settings, Save, Scale, Receipt, FolderPlus, Tag, Type, Download, Upload, RotateCcw, X, Database, CalendarDays } from 'lucide-react';
+import { Search, Lock, ChevronLeft, Package, Calculator, DollarSign, Beef, Carrot, Fish, Coffee, CheckCircle, AlertCircle, Utensils, Plus, Trash2, Edit2, Pencil, Check, StickyNote, Layers, ChevronRight, Store, Settings, Save, Scale, Receipt, FolderPlus, Tag, Type, Download, Upload, RotateCcw, X, Database, CalendarDays } from 'lucide-react';
 
 // ==========================================
 // 本機資料儲存（獨立版，不再連接任何雲端或進貨系統）
@@ -152,6 +152,11 @@ export default function App() {
   const [costPickId, setCostPickId] = useState(null);
   const [addingItem, setAddingItem] = useState(null);
   const [editingCat, setEditingCat] = useState(null); // { name, value }
+  const [noteDraft, setNoteDraft] = useState('');
+  const [quickCat, setQuickCat] = useState(null); // 每月售價：展開的分類（快速選商品）
+  const [calcEditing, setCalcEditing] = useState(false); // 已儲存的食材成本需按鉛筆才能修改
+  const [editingNote, setEditingNote] = useState(null); // { id, text }
+  const [notes, setNotes] = useState(() => Array.isArray(initialSaved?.notes) ? initialSaved.notes : []);
   const [costCategories, setCostCategories] = useState(() => Array.isArray(initialSaved?.costCategories) ? initialSaved.costCategories : migrateRecipeCategories(initialSaved?.setMenus));
   const [openCategoryId, setOpenCategoryId] = useState(null);
   const [showNewCategory, setShowNewCategory] = useState(false);
@@ -322,13 +327,13 @@ export default function App() {
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        version: 1, samplesRemoved: true, rawErpData, productRules, globalSettings, setMenus, foodCostPercent, stores, monthlyPrices, costCalcs, units, costCategories
+        version: 1, samplesRemoved: true, rawErpData, productRules, globalSettings, setMenus, foodCostPercent, stores, monthlyPrices, costCalcs, units, costCategories, notes
       }));
     } catch (e) {
       console.error('本機儲存失敗:', e);
       showNotice('error', '儲存失敗：瀏覽器儲存空間不足或已停用。');
     }
-  }, [rawErpData, productRules, globalSettings, setMenus, foodCostPercent, stores, monthlyPrices, costCalcs, units, costCategories]);
+  }, [rawErpData, productRules, globalSettings, setMenus, foodCostPercent, stores, monthlyPrices, costCalcs, units, costCategories, notes]);
 
   const saveSettings = () => {
     setProductRules(editingRules);
@@ -343,7 +348,7 @@ export default function App() {
   const handleExport = () => {
     const data = {
       app: 'cost-management-system', version: 1, exportedAt: new Date().toISOString(),
-      rawErpData, productRules, globalSettings, setMenus, foodCostPercent, stores, monthlyPrices, costCalcs, units, costCategories
+      rawErpData, productRules, globalSettings, setMenus, foodCostPercent, stores, monthlyPrices, costCalcs, units, costCategories, notes
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -381,6 +386,7 @@ export default function App() {
         setCostCalcs(Array.isArray(data.costCalcs) ? data.costCalcs : []);
         setUnits(Array.isArray(data.units) && data.units.length > 0 ? data.units : defaultUnits);
         setCostCategories(Array.isArray(data.costCategories) ? data.costCategories : migrateRecipeCategories(data.setMenus));
+        setNotes(Array.isArray(data.notes) ? data.notes : []);
         setOpenCategoryId(null);
         setCostPickId(null);
         showNotice('success', '備份匯入成功！');
@@ -405,6 +411,9 @@ export default function App() {
     setCostCalcs([]);
     setUnits(defaultUnits);
     setCostCategories([]);
+    setNotes([]);
+    setNoteDraft('');
+    setEditingNote(null);
     setOpenCategoryId(null);
     setCostPickId(null);
     setMpForm({ storeId: '', category: '', menuId: '', price: '' });
@@ -876,7 +885,13 @@ export default function App() {
       const addWeight = addingItem ? parseFloat(addingItem.weight) : NaN;
       const addLineCost = addUnitCost !== null && addWeight > 0 ? addUnitCost * addWeight : null;
 
+      // 同一分類內不可有相同商品（以商品名稱判斷，與成本來源的門店／月份無關）
+      const itemNameInCat = (it) => { const c = costCalcs.find(x => x.id === it.costCalcId); return c ? c.menuName : it.itemName; };
+      const dupItem = addMenu ? openCat.items.find(it => itemNameInCat(it) === addMenu.name) : null;
+      const dupItemMsg = dupItem ? `「${addMenu.name}」已在分類「${openCat.name}」中，不可新增相同的商品。如需調整請直接修改該單品的重量。` : '';
+
       const handleAddItem = () => {
+        if (dupItem) { showNotice('error', dupItemMsg); return; }
         if (!calcForAdd || addLineCost === null) return;
         setCostCategories(prev => prev.map(c => c.id === openCat.id ? { ...c, items: [...c.items, { id: `ci-${newUid()}`, costCalcId: calcForAdd.id, itemName: calcForAdd.menuName, storeName: calcForAdd.storeName, recipeCost: addUnitCost, recipeUnit: calcForAdd.weightUnit, qty: addWeight }] } : c));
         setAddingItem(null);
@@ -970,6 +985,11 @@ export default function App() {
                       <input type="number" min="0" step="any" value={addingItem.weight} disabled={!calcForAdd} onChange={(e) => setAddingItem({ ...addingItem, weight: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') handleAddItem(); }} placeholder="例如 100" className={`${fieldCls} disabled:opacity-40 disabled:cursor-not-allowed`} aria-label="重量" />
                     </div>
                   </div>
+                  {dupItem && (
+                    <div role="alert" className="mt-4 flex items-start gap-2 bg-red-50 border border-red-300 text-red-600 rounded-[16px] px-4 py-3 text-sm font-bold">
+                      <AlertCircle size={18} className="shrink-0 mt-0.5" /><span>{dupItemMsg}</span>
+                    </div>
+                  )}
                   {addMenu && addCalcs.length === 0 && (
                     <div className="mt-4 bg-white border border-[#B4B4BE] rounded-[16px] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                       <p className="text-sm font-bold text-red-600">「{addMenu.name}」還沒有在「{texts.tabIngredients}」試算成本，請先試算後再加入。</p>
@@ -988,7 +1008,7 @@ export default function App() {
                   </div>
                   <div className="flex justify-end gap-3 mt-4">
                     <button onClick={() => setAddingItem(null)} className="bg-[#F5F5F5] hover:bg-neutral-200 text-black px-6 py-2.5 rounded-full font-bold text-sm transition-all">取消</button>
-                    <button onClick={handleAddItem} disabled={addLineCost === null} className="bg-black hover:bg-neutral-800 disabled:bg-[#F5F5F5] disabled:text-neutral-400 disabled:cursor-not-allowed text-white px-6 py-2.5 rounded-full font-bold text-sm transition-all">加入</button>
+                    <button onClick={handleAddItem} disabled={addLineCost === null || !!dupItem} className="bg-black hover:bg-neutral-800 disabled:bg-[#F5F5F5] disabled:text-neutral-400 disabled:cursor-not-allowed text-white px-6 py-2.5 rounded-full font-bold text-sm transition-all">加入</button>
                   </div>
                 </>
               )}
@@ -1122,6 +1142,7 @@ export default function App() {
       setMonthlyPrices(prev => prev.map(r => (r.category || '未分類') === oldName ? { ...r, category: newName } : r));
       setCostCalcs(prev => prev.map(c => (c.category || '未分類') === oldName ? { ...c, category: newName } : c));
       if (mpForm.category === oldName) setMpForm({ ...mpForm, category: newName });
+      if (quickCat === oldName) setQuickCat(newName);
       setEditingCat(null);
       showNotice('success', `已將分類「${oldName}」改名為「${newName}」。`);
     };
@@ -1132,8 +1153,17 @@ export default function App() {
         setSetMenus(prev => prev.filter(m => categoryOf(m) !== name));
         setMonthlyPrices(prev => prev.filter(r => !menuIds.includes(r.menuId)));
         if (mpForm.category === name) setMpForm({ ...mpForm, category: '', menuId: '', price: '' });
+        if (quickCat === name) setQuickCat(null);
         setEditingCat(null);
       } });
+    };
+
+    // 從分類卡片快速選取商品：帶入下方登錄表單，只剩輸入售價
+    const handleQuickPick = (menu) => {
+      const storeId = mpForm.storeId || (stores.length === 1 ? stores[0].id : '');
+      if (!storeId) { showNotice('error', '請先在下方「登錄售價」選擇門店。'); return; }
+      setMpForm({ storeId, category: categoryOf(menu), newCategory: '', menuId: menu.id, newMenuName: '', price: '' });
+      setTimeout(() => { const el = document.getElementById('mp-price'); if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus(); } }, 60);
     };
 
     const handleDeleteStore = (store) => {
@@ -1256,7 +1286,9 @@ export default function App() {
                 </span>
               ) : (
                 <span key={name} className="inline-flex items-center gap-1 bg-white border border-[#B4B4BE] text-black font-bold text-sm pl-4 pr-1.5 py-1.5 rounded-full">
-                  {name}<span className="text-[11px] text-[#5F5F68] font-bold ml-1">{catCount(name)}</span>
+                  <button onClick={() => setQuickCat(quickCat === name ? null : name)} aria-pressed={quickCat === name} aria-label={`查看分類 ${name} 的商品`} className={`inline-flex items-center gap-1 rounded-full px-3 py-1 -ml-2 transition-colors ${quickCat === name ? 'bg-black text-white' : 'hover:bg-neutral-100'}`}>
+                    {name}<span className={`text-[11px] font-bold ml-1 ${quickCat === name ? 'text-neutral-300' : 'text-[#5F5F68]'}`}>{catCount(name)}</span>
+                  </button>
                   <button onClick={() => setEditingCat({ name, value: name })} aria-label={`編輯分類 ${name}`} className="w-7 h-7 flex items-center justify-center rounded-full text-neutral-400 hover:text-black hover:bg-neutral-100 transition-colors"><Pencil size={13} /></button>
                   <button onClick={() => handleDeleteCategory2(name)} aria-label={`刪除分類 ${name}`} className="w-7 h-7 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><X size={14} /></button>
                 </span>
@@ -1264,6 +1296,23 @@ export default function App() {
             ))}
             {categoryOptions.length === 0 && <span className="text-red-600 font-bold text-sm py-2">尚未建立分類，請在下方登錄售價時選擇「+ 新增分類...」。</span>}
           </div>
+          {quickCat && categoryOptions.includes(quickCat) && (
+            <div className="mt-5 bg-white border border-[#B4B4BE] rounded-[20px] p-4">
+              <p className="text-xs font-bold text-[#5F5F68] mb-3 tracking-widest">「{quickCat}」的商品・點選即可帶入下方登錄售價</p>
+              <div className="flex flex-wrap gap-2">
+                {setMenus.filter(m => categoryOf(m) === quickCat).map(m => {
+                  const rec = mpForm.storeId ? monthlyPrices.find(r => r.month === selectedMonth && r.storeId === mpForm.storeId && r.menuId === m.id) : null;
+                  const picked = mpForm.menuId === m.id;
+                  return (
+                    <button key={m.id} onClick={() => handleQuickPick(m)} disabled={!!rec} aria-label={`選取商品 ${m.name}`}
+                      className={`px-4 py-2 rounded-full font-bold text-sm border transition-all ${rec ? 'bg-[#F5F5F5] text-neutral-400 border-neutral-200 cursor-not-allowed' : picked ? 'bg-black text-white border-black' : 'bg-white text-black border-[#B4B4BE] hover:border-black hover:-translate-y-0.5'}`}>
+                      {m.name}{rec && <span className="ml-2 text-[11px] text-emerald-600">已登錄 ${rec.price}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 登錄售價：門店 → 分類 → 商品 → 售價 */}
@@ -1314,7 +1363,7 @@ export default function App() {
             <div>
               <label className={labelCls}>4. 售價 ($)</label>
               <input
-                type="number" min="0" step="1" value={mpForm.price} disabled={isNewMenu ? !resolvedMenuName : !mpForm.menuId}
+                id="mp-price" type="number" min="0" step="1" value={mpForm.price} disabled={isNewMenu ? !resolvedMenuName : !mpForm.menuId}
                 onChange={(e) => setMpForm({ ...mpForm, price: e.target.value })}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleSavePrice(); }}
                 placeholder="0" className={selectCls}
@@ -1601,7 +1650,13 @@ export default function App() {
     const unit = (costForm.weightUnit || '').trim() || '單位';
     const result = calcCost(price, weight, yieldPct, taxPct);
 
+    const locked = !!savedForPicked && !calcEditing;
+    const handleCancelEdit = () => {
+      if (savedForPicked) setCostForm({ price: savedForPicked.price, weight: savedForPicked.weight, weightUnit: savedForPicked.weightUnit, yieldRate: savedForPicked.yieldRate, yieldNote: savedForPicked.yieldNote || '', taxRate: savedForPicked.taxRate });
+      setCalcEditing(false); setUnitPanel({ ...unitPanel, open: false });
+    };
     const handlePick = (r) => {
+      setCalcEditing(false);
       setCostPickId(r.id);
       const saved = costCalcs.find(c => c.recordId === r.id);
       setCostForm(saved
@@ -1617,6 +1672,7 @@ export default function App() {
         price, weight, weightUnit: unit, yieldRate: yieldPct, yieldNote: (costForm.yieldNote || '').trim(), taxRate: taxPct
       };
       setCostCalcs(prev => savedForPicked ? prev.map(c => c.id === entry.id ? entry : c) : [...prev, entry]);
+      setCalcEditing(false);
       showNotice('success', `已儲存「${entry.menuName}」的食材成本。`);
     };
 
@@ -1624,7 +1680,7 @@ export default function App() {
       askConfirm({ title: `刪除「${c.menuName}」食材成本？`, message: '已加入商品計算的單品會保留最後儲存的成本。', onConfirm: () => setCostCalcs(prev => prev.filter(x => x.id !== c.id)) });
     };
 
-    const inputCls = 'w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all';
+    const inputCls = 'w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all disabled:bg-[#ECECF0] disabled:text-neutral-600 disabled:cursor-not-allowed';
     const labelCls = 'block text-xs font-bold text-[#5F5F68] mb-2 tracking-widest uppercase';
     const setField = (key, value) => setCostForm({ ...costForm, [key]: value });
     // 單位清單：目前選用但已不在清單內的單位（例如舊紀錄）仍會顯示
@@ -1731,27 +1787,33 @@ export default function App() {
         {/* 步驟 2：輸入並試算 */}
         {picked && (
           <div className="bg-[#DEDEE4] p-6 md:p-8 rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] mb-8">
-            <h3 className="font-black text-lg text-black mb-1 flex items-center gap-3">
-              <div className="p-2 bg-[#F5F5F5] rounded-full"><Calculator size={20} className="text-black" /></div>
-              2. 試算「{productNameOf(picked)}」
-            </h3>
+            <div className="flex items-start justify-between gap-3">
+              <h3 className="font-black text-lg text-black mb-1 flex items-center gap-3">
+                <div className="p-2 bg-[#F5F5F5] rounded-full"><Calculator size={20} className="text-black" /></div>
+                2. 試算「{productNameOf(picked)}」
+              </h3>
+              {savedForPicked && (calcEditing
+                ? <button onClick={handleCancelEdit} className="shrink-0 flex items-center gap-1.5 bg-white border border-[#B4B4BE] hover:border-black text-black px-4 py-2 rounded-full font-bold text-sm transition-colors"><X size={14} /> 取消編輯</button>
+                : <button onClick={() => setCalcEditing(true)} aria-label="編輯食材成本" title="編輯" className="shrink-0 flex items-center gap-1.5 bg-black hover:bg-neutral-800 text-white px-4 py-2 rounded-full font-bold text-sm transition-colors"><Pencil size={14} /> 編輯</button>)}
+            </div>
             <p className="text-xs font-bold text-[#5F5F68] mb-6 ml-12">{storeNameOf(picked.storeId)} · {fmtMonth(picked.month)}</p>
+            {locked && <p className="text-xs font-bold text-red-600 mb-5 -mt-3 ml-12">此商品已儲存，如需修改內容請按右上角「編輯」（鉛筆）。</p>}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 items-start">
               <div>
                 <label className={labelCls}>售價 ($)</label>
-                <input type="number" min="0" step="any" value={costForm.price} onChange={(e) => setField('price', e.target.value)} className={inputCls} placeholder="0" />
+                <input type="number" min="0" step="any" value={costForm.price} disabled={locked} onChange={(e) => setField('price', e.target.value)} className={inputCls} placeholder="0" />
                 <p className="text-[11px] text-red-600 font-bold mt-2">已帶入每月售價，可自行修改</p>
               </div>
               <div className="space-y-5">
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <label htmlFor="cost-unit" className="text-xs font-bold text-[#5F5F68] tracking-widest uppercase">單位</label>
-                    <button type="button" onClick={() => setUnitPanel({ ...unitPanel, open: !unitPanel.open })} className="text-[11px] font-bold text-[#5F5F68] hover:text-black flex items-center gap-1 transition-colors">
+                    <button type="button" disabled={locked} onClick={() => setUnitPanel({ ...unitPanel, open: !unitPanel.open })} className="disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-bold text-[#5F5F68] hover:text-black flex items-center gap-1 transition-colors">
                       <Edit2 size={12} /> {unitPanel.open ? '完成' : '新增 / 編輯單位'}
                     </button>
                   </div>
-                  <select id="cost-unit" value={costForm.weightUnit} onChange={(e) => setField('weightUnit', e.target.value)} className={`${inputCls} h-[52px]`}>
+                  <select id="cost-unit" value={costForm.weightUnit} disabled={locked} onChange={(e) => setField('weightUnit', e.target.value)} className={`${inputCls} h-[52px]`}>
                     {unitList.map(u => <option key={u} value={u}>{u}</option>)}
                   </select>
                   {unitPanel.open && (
@@ -1779,18 +1841,18 @@ export default function App() {
                 </div>
                 <div>
                   <label className={labelCls}>重量</label>
-                  <input type="number" min="0" step="any" value={costForm.weight} onChange={(e) => setField('weight', e.target.value)} className={`${inputCls} h-[52px]`} placeholder="例如 1000" />
+                  <input type="number" min="0" step="any" value={costForm.weight} disabled={locked} onChange={(e) => setField('weight', e.target.value)} className={`${inputCls} h-[52px]`} placeholder="例如 1000" />
                 </div>
               </div>
               <div>
                 <label className={labelCls}>可用重量 (%)</label>
-                <input type="number" min="0" max="100" step="any" value={costForm.yieldRate} onChange={(e) => setField('yieldRate', e.target.value)} className={inputCls} placeholder="例如 85" />
+                <input type="number" min="0" max="100" step="any" value={costForm.yieldRate} disabled={locked} onChange={(e) => setField('yieldRate', e.target.value)} className={inputCls} placeholder="例如 85" />
                 <p className="text-[11px] text-red-600 font-bold mt-2">填可用比例：85 代表 重量 × 85%</p>
-                <input type="text" value={costForm.yieldNote || ''} onChange={(e) => setField('yieldNote', e.target.value)} className={`${inputCls} mt-3 text-sm`} placeholder="算法說明，例如：去骨後剩 85%" aria-label="耗損算法說明" />
+                <input type="text" value={costForm.yieldNote || ''} disabled={locked} onChange={(e) => setField('yieldNote', e.target.value)} className={`${inputCls} mt-3 text-sm`} placeholder="算法說明，例如：去骨後剩 85%" aria-label="耗損算法說明" />
               </div>
               <div>
                 <label className={labelCls}>營業稅 (%)</label>
-                <input type="number" min="0" step="any" value={costForm.taxRate} onChange={(e) => setField('taxRate', e.target.value)} className={inputCls} placeholder="例如 5" />
+                <input type="number" min="0" step="any" value={costForm.taxRate} disabled={locked} onChange={(e) => setField('taxRate', e.target.value)} className={inputCls} placeholder="例如 5" />
                 <p className="text-[11px] text-red-600 font-bold mt-2">填 5 代表 × 1.05</p>
               </div>
             </div>
@@ -1810,7 +1872,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="flex justify-end mt-6">
+            <div className={`flex justify-end mt-6 ${locked ? 'hidden' : ''}`}>
               <button onClick={handleSaveCalc} disabled={result === null} className="bg-black hover:bg-neutral-800 disabled:bg-[#F5F5F5] disabled:text-neutral-400 disabled:cursor-not-allowed text-white px-8 py-3.5 rounded-full font-bold text-sm flex items-center gap-2 transition-all">
                 <Save size={16} /> {savedForPicked ? '更新食材成本' : '儲存食材成本'}
               </button>
@@ -1856,7 +1918,7 @@ export default function App() {
                           <span className="text-xs text-[#5F5F68] font-medium ml-1">/{c.weightUnit}</span>
                         </td>
                         <td className="px-3 py-4 text-right whitespace-nowrap">
-                          {recordAlive && <button onClick={() => { const r = monthlyPrices.find(x => x.id === c.recordId); if (r) { handlePick(r); window.scrollTo({ top: 0, behavior: 'smooth' }); } }} title="編輯" className="p-2 text-neutral-300 hover:text-black hover:bg-[#F5F5F5] rounded-xl transition-colors"><Edit2 size={15} /></button>}
+                          {recordAlive && <button onClick={() => { const r = monthlyPrices.find(x => x.id === c.recordId); if (r) { handlePick(r); setCalcEditing(true); window.scrollTo({ top: 0, behavior: 'smooth' }); } }} title="編輯" className="p-2 text-neutral-300 hover:text-black hover:bg-[#F5F5F5] rounded-xl transition-colors"><Edit2 size={15} /></button>}
                           <button onClick={() => handleDeleteCalc(c)} title="刪除" className="p-2 text-neutral-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={15} /></button>
                         </td>
                       </tr>
@@ -1871,11 +1933,82 @@ export default function App() {
     );
   };
 
+  const renderNotesTab = () => {
+    const fmtTime = (t) => { try { const d = new Date(t); const z = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}/${z(d.getMonth() + 1)}/${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`; } catch (e) { return ''; } };
+    const handleAddNote = () => {
+      const text = noteDraft.trim();
+      if (!text) { showNotice('error', '請先輸入事項內容。'); return; }
+      const now = Date.now();
+      setNotes(prev => [{ id: `n-${newUid()}`, text, done: false, createdAt: now, updatedAt: now }, ...prev]);
+      setNoteDraft('');
+    };
+    const handleToggleNote = (id) => setNotes(prev => prev.map(n => n.id === id ? { ...n, done: !n.done } : n));
+    const handleSaveNote = () => {
+      if (!editingNote) return;
+      const text = editingNote.text.trim();
+      if (!text) { showNotice('error', '事項內容不能是空白。'); return; }
+      setNotes(prev => prev.map(n => n.id === editingNote.id ? { ...n, text, updatedAt: Date.now() } : n));
+      setEditingNote(null);
+    };
+    const handleDeleteNote = (n) => askConfirm({ title: '刪除這則事項？', message: n.text.length > 40 ? n.text.slice(0, 40) + '…' : n.text, onConfirm: () => setNotes(prev => prev.filter(x => x.id !== n.id)) });
+    const doneCount = notes.filter(n => n.done).length;
+    return (
+      <div className="max-w-3xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <div className="mb-10 text-center">
+          <h2 className="text-3xl font-black text-black tracking-tight">記事本</h2>
+          <p className="text-[#5F5F68] font-medium text-sm mt-2 tracking-wide">記錄各種事項，自動儲存在本機。</p>
+        </div>
+
+        <div className="bg-[#DEDEE4] p-6 md:p-8 rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] mb-8">
+          <label className="block text-xs font-bold text-[#5F5F68] mb-2 tracking-widest uppercase">新增事項</label>
+          <textarea value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleAddNote(); }} rows={3} placeholder="輸入要記錄的事項…（Ctrl + Enter 快速新增）" aria-label="事項內容" className="w-full text-left bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold resize-y" />
+          <div className="flex justify-end mt-4">
+            <button onClick={handleAddNote} className="bg-black hover:bg-neutral-800 text-white px-6 py-3 rounded-full font-bold text-sm flex items-center gap-2 transition-all"><Plus size={16} /> 新增</button>
+          </div>
+        </div>
+
+        <h3 className="text-xl font-black text-black tracking-tight mb-5">全部事項 <span className="text-[#5F5F68] text-sm font-bold ml-2">共 {notes.length} 則・已完成 {doneCount} 則</span></h3>
+        {notes.length === 0 ? (
+          <div className="text-center py-16 text-red-600 font-bold rounded-[32px] bg-[#F5F5F5]">還沒有任何事項。</div>
+        ) : (
+          <div className="space-y-4">
+            {notes.map(n => (
+              <div key={n.id} className="text-left bg-white rounded-[24px] p-5 border border-[#B4B4BE] shadow-[0_6px_18px_rgba(0,0,0,0.14)]">
+                {editingNote && editingNote.id === n.id ? (
+                  <>
+                    <textarea autoFocus value={editingNote.text} onChange={(e) => setEditingNote({ ...editingNote, text: e.target.value })} onKeyDown={(e) => { if (e.key === 'Escape') setEditingNote(null); }} rows={4} aria-label="編輯事項" className="w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold resize-y" />
+                    <div className="flex justify-end gap-3 mt-3">
+                      <button onClick={() => setEditingNote(null)} className="px-5 py-2.5 rounded-full bg-[#F5F5F5] hover:bg-neutral-200 text-black font-bold text-sm transition-colors">取消</button>
+                      <button onClick={handleSaveNote} className="px-5 py-2.5 rounded-full bg-black hover:bg-neutral-800 text-white font-bold text-sm transition-colors">儲存</button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-start gap-4">
+                    <button onClick={() => handleToggleNote(n.id)} aria-label={n.done ? '標記為未完成' : '標記為已完成'} aria-pressed={!!n.done} className={`mt-0.5 w-7 h-7 shrink-0 rounded-full border-2 flex items-center justify-center transition-colors ${n.done ? 'bg-black border-black text-white' : 'bg-white border-[#B4B4BE] text-transparent hover:border-black'}`}><Check size={14} strokeWidth={3} /></button>
+                    <div className="flex-1 min-w-0">
+                      <p className={`font-bold text-base whitespace-pre-wrap break-words leading-relaxed ${n.done ? 'text-neutral-400 line-through' : 'text-black'}`}>{n.text}</p>
+                      <p className="text-[11px] text-[#5F5F68] font-bold mt-2">{fmtTime(n.createdAt)}{n.updatedAt && n.updatedAt !== n.createdAt ? `（已編輯 ${fmtTime(n.updatedAt)}）` : ''}</p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button onClick={() => setEditingNote({ id: n.id, text: n.text })} aria-label="編輯事項" className="w-9 h-9 flex items-center justify-center rounded-full text-neutral-400 hover:text-black hover:bg-neutral-100 transition-colors"><Pencil size={16} /></button>
+                      <button onClick={() => handleDeleteNote(n)} aria-label="刪除事項" className="w-9 h-9 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><Trash2 size={16} /></button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const navItems = [
     { id: 'monthlyPrice', icon: <CalendarDays size={20} strokeWidth={2} />, label: texts.tabMonthlyPrice || '每月售價' },
     { id: 'ingredients', icon: <Layers size={20} strokeWidth={2} />, label: texts.tabIngredients },
     { id: 'setMenus', icon: <Utensils size={20} strokeWidth={2} />, label: texts.tabSetMenus },
     { id: 'sellingPrice', icon: <Tag size={20} strokeWidth={2} />, label: texts.tabSellingPrice || '售價金額' },
+    { id: 'notes', icon: <StickyNote size={20} strokeWidth={2} />, label: '記事本' },
     { id: 'settings', icon: <Settings size={20} strokeWidth={2} />, label: texts.tabSettings },
   ];
 
@@ -1934,7 +2067,7 @@ export default function App() {
             </div>
 
             <div className="flex-1 flex items-center gap-4 w-full justify-between sm:justify-end">
-              {currentTab !== 'settings' && currentTab !== 'monthlyPrice' && currentTab !== 'ingredients' && currentTab !== 'setMenus' && (
+              {currentTab !== 'settings' && currentTab !== 'monthlyPrice' && currentTab !== 'ingredients' && currentTab !== 'setMenus' && currentTab !== 'notes' && (
                 <div className="relative w-full sm:max-w-md">
                   <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
                     <Search className="h-4 w-4 text-[#5F5F68]" />
@@ -1955,6 +2088,7 @@ export default function App() {
           {currentTab === 'ingredients' && renderIngredientsTab()}
           {currentTab === 'setMenus' && renderSetMenuTab()}
           {currentTab === 'sellingPrice' && renderSellingPriceTab()}
+          {currentTab === 'notes' && renderNotesTab()}
           {currentTab === 'settings' && renderSettingsTab()}
         </main>
       </div>
