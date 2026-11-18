@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, Lock, ChevronLeft, Package, Calculator, DollarSign, Beef, Carrot, Fish, Coffee, CheckCircle, AlertCircle, Utensils, Plus, Trash2, Edit2, Pencil, Check, StickyNote, Layers, ChevronRight, Store, Settings, Save, Scale, Receipt, FolderPlus, Tag, Type, Download, Upload, RotateCcw, X, Database, CalendarDays } from 'lucide-react';
+import { Search, Lock, ChevronLeft, ChevronDown, Package, Calculator, DollarSign, Beef, Carrot, Fish, Coffee, CheckCircle, AlertCircle, Utensils, Plus, Trash2, Edit2, Pencil, Check, StickyNote, Layers, ChevronRight, Store, Settings, Save, Scale, Receipt, FolderPlus, Tag, Type, Download, Upload, RotateCcw, X, Database, CalendarDays } from 'lucide-react';
 
 // ==========================================
 // 本機資料儲存（獨立版，不再連接任何雲端或進貨系統）
@@ -153,6 +153,9 @@ export default function App() {
   const [addingItem, setAddingItem] = useState(null);
   const [editingCat, setEditingCat] = useState(null); // { name, value }
   const [noteDraft, setNoteDraft] = useState('');
+  const [recSearch, setRecSearch] = useState('');
+  const [recCat, setRecCat] = useState('');
+  const [collapsedCats, setCollapsedCats] = useState({});
   const [quickCat, setQuickCat] = useState(null); // 每月售價：展開的分類（快速選商品）
   const [calcEditing, setCalcEditing] = useState(false); // 已儲存的食材成本需按鉛筆才能修改
   const [editingNote, setEditingNote] = useState(null); // { id, text }
@@ -165,6 +168,8 @@ export default function App() {
   const [unitPanel, setUnitPanel] = useState({ open: false, newName: '' });
   const [costMonthFilter, setCostMonthFilter] = useState('');
   const [costStoreFilter, setCostStoreFilter] = useState('');
+  const [costCatFilter, setCostCatFilter] = useState('');
+  const [costStatusFilter, setCostStatusFilter] = useState(''); // '' | 'todo' | 'done'
   const [costForm, setCostForm] = useState({ price: '', weight: '', weightUnit: 'g', yieldRate: '', yieldNote: '', taxRate: '' });
   const fileInputRef = useRef(null);
 
@@ -872,8 +877,10 @@ export default function App() {
     const openCat = costCategories.find(c => c.id === openCategoryId);
     if (openCat) {
       const catOf = (x) => (x && (x.menuCategory || x.category)) || '未分類';
-      const addCategories = Array.from(new Set(setMenus.map(catOf)));
-      const addMenus = addingItem && addingItem.category ? setMenus.filter(m => catOf(m) === addingItem.category) : [];
+      // 與「每月售價」即時同步：只列出仍有售價紀錄的商品與分類
+      const liveMenus = setMenus.filter(m => monthlyPrices.some(r => r.menuId === m.id));
+      const addCategories = Array.from(new Set(liveMenus.map(catOf)));
+      const addMenus = addingItem && addingItem.category ? liveMenus.filter(m => catOf(m) === addingItem.category) : [];
       const addMenu = addingItem ? setMenus.find(m => m.id === addingItem.menuId) : null;
       // 與該商品對應的食材成本（依每月售價紀錄或名稱＋分類比對），月份新的排前面
       const addCalcs = addMenu ? costCalcs.filter(c => {
@@ -893,9 +900,10 @@ export default function App() {
       const handleAddItem = () => {
         if (dupItem) { showNotice('error', dupItemMsg); return; }
         if (!calcForAdd || addLineCost === null) return;
-        setCostCategories(prev => prev.map(c => c.id === openCat.id ? { ...c, items: [...c.items, { id: `ci-${newUid()}`, costCalcId: calcForAdd.id, itemName: calcForAdd.menuName, storeName: calcForAdd.storeName, recipeCost: addUnitCost, recipeUnit: calcForAdd.weightUnit, qty: addWeight }] } : c));
+        setCostCategories(prev => prev.map(c => c.id === openCat.id ? { ...c, items: [...c.items, { id: `ci-${newUid()}`, costCalcId: calcForAdd.id, itemName: calcForAdd.menuName, storeName: calcForAdd.storeName, recipeCost: addUnitCost, recipeUnit: calcForAdd.weightUnit, qty: addWeight, note: (addingItem.note || '').trim() }] } : c));
         setAddingItem(null);
       };
+      const handleNote = (itemId, value) => updateCategory(openCat.id, { items: openCat.items.map(i => i.id === itemId ? { ...i, note: value } : i) });
       const handleQty = (itemId, value) => updateCategory(openCat.id, { items: openCat.items.map(i => i.id === itemId ? { ...i, qty: value === '' ? '' : (parseFloat(value) || 0) } : i) });
       const handleRemoveItem = (itemId) => {
       const it = openCat.items.find(i => i.id === itemId);
@@ -984,6 +992,10 @@ export default function App() {
                       <label className={labelCls}>3. 重量{calcForAdd && <span className="normal-case">（{calcForAdd.weightUnit}）</span>}</label>
                       <input type="number" min="0" step="any" value={addingItem.weight} disabled={!calcForAdd} onChange={(e) => setAddingItem({ ...addingItem, weight: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') handleAddItem(); }} placeholder="例如 100" className={`${fieldCls} disabled:opacity-40 disabled:cursor-not-allowed`} aria-label="重量" />
                     </div>
+                    <div>
+                      <label className={labelCls}>備註（選填）</label>
+                      <input type="text" value={addingItem.note || ''} disabled={!calcForAdd} maxLength={100} onChange={(e) => setAddingItem({ ...addingItem, note: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') handleAddItem(); }} placeholder="例如：去蒂頭、切丁" className={`${fieldCls} disabled:opacity-40 disabled:cursor-not-allowed`} aria-label="備註" />
+                    </div>
                   </div>
                   {dupItem && (
                     <div role="alert" className="mt-4 flex items-start gap-2 bg-red-50 border border-red-300 text-red-600 rounded-[16px] px-4 py-3 text-sm font-bold">
@@ -1023,9 +1035,10 @@ export default function App() {
                 <div key={it.id} className="flex flex-col sm:flex-row sm:items-center justify-between bg-white p-4 rounded-[16px] gap-4 shadow-[0_6px_18px_rgba(0,0,0,0.14)] border border-[#B4B4BE] hover:border-[#71717A] transition-colors">
                   <div className="flex-1 min-w-0 flex items-center gap-4">
                     <div className="w-10 h-10 rounded-full bg-[#F5F5F5] flex items-center justify-center shrink-0"><Tag size={14} className="text-black" /></div>
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1 text-left">
                       <h4 className="font-black text-black text-xl leading-none mb-1.5 truncate">{info.name}</h4>
                       <p className="text-[10px] text-[#5F5F68] font-bold tracking-wide">{info.store} • ${fmtUnitCost(info.unitCost)}/{info.unit}{info.missing ? '（來源已刪除，沿用原成本）' : ''}</p>
+                      <input type="text" value={it.note || ''} onChange={(e) => handleNote(it.id, e.target.value)} maxLength={100} placeholder="備註…" aria-label={`${info.name} 備註`} className="mt-2 w-full max-w-md bg-[#F5F5F5] border border-transparent focus:bg-white focus:border-[#B4B4BE] rounded-full px-4 py-1.5 text-sm font-bold text-black outline-none focus:ring-2 focus:ring-black placeholder:text-neutral-400" />
                     </div>
                   </div>
                   <div className="flex items-center gap-3 sm:justify-end flex-wrap">
@@ -1116,9 +1129,16 @@ export default function App() {
       setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
     };
     const categoryOf = (m) => m.menuCategory || '未分類';
-    const categoryOptions = Array.from(new Set(setMenus.map(categoryOf)));
-    const menuOptions = setMenus.filter(m => categoryOf(m) === mpForm.category);
+    const liveMenus = setMenus.filter(m => monthlyPrices.some(r => r.menuId === m.id)); // 已沒有任何售價紀錄的商品不顯示
+    const categoryOptions = Array.from(new Set(liveMenus.map(categoryOf)));
+    const menuOptions = liveMenus.filter(m => categoryOf(m) === mpForm.category);
     const monthRecords = monthlyPrices.filter(r => r.month === selectedMonth);
+    const recName = (r) => { const live = setMenus.find(m => m.id === r.menuId); return live ? live.name : r.menuName; };
+    const recCategory = (r) => { const live = setMenus.find(m => m.id === r.menuId); return live ? categoryOf(live) : (r.category || '未分類'); };
+    const recQuery = recSearch.trim().toLowerCase();
+    const recCatList = Array.from(new Set(monthRecords.map(recCategory))).sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+    const filteredRecords = monthRecords.filter(r => (!recCat || recCategory(r) === recCat) && (!recQuery || recName(r).toLowerCase().includes(recQuery) || recCategory(r).toLowerCase().includes(recQuery)));
+    const toggleCollapse = (key) => setCollapsedCats(prev => ({ ...prev, [key]: !prev[key] }));
 
     const handleAddStore = () => {
       const name = newStoreName.trim();
@@ -1131,7 +1151,7 @@ export default function App() {
       showNotice('success', `已新增門店「${name}」。`);
     };
 
-    const catCount = (name) => setMenus.filter(m => categoryOf(m) === name).length;
+    const catCount = (name) => liveMenus.filter(m => categoryOf(m) === name).length;
     const handleRenameCategory = () => {
       if (!editingCat) return;
       const oldName = editingCat.name; const newName = editingCat.value.trim();
@@ -1220,7 +1240,11 @@ export default function App() {
       setMonthlyPrices(prev => prev.map(r => r.id === id && r.price === '' ? { ...r, price: 0 } : r));
     };
     const handleDeleteRecord = (rec, productName) => {
-      askConfirm({ title: `刪除「${productName}」售價紀錄？`, message: '只會刪除這個月份的這筆售價。', onConfirm: () => setMonthlyPrices(prev => prev.filter(r => r.id !== rec.id)) });
+      const lastOne = !monthlyPrices.some(r => r.menuId === rec.menuId && r.id !== rec.id);
+      askConfirm({ title: `刪除「${productName}」售價紀錄？`, message: lastOne ? '這是此商品唯一的售價紀錄，刪除後商品也會從「商品計算」的選單中移除。' : '只會刪除這個月份的這筆售價。', onConfirm: () => {
+        setMonthlyPrices(prev => prev.filter(r => r.id !== rec.id));
+        if (lastOne) setSetMenus(prev => prev.filter(m => m.id !== rec.menuId));
+      } });
     };
 
     const selectCls = 'w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed';
@@ -1300,7 +1324,7 @@ export default function App() {
             <div className="mt-5 bg-white border border-[#B4B4BE] rounded-[20px] p-4">
               <p className="text-xs font-bold text-[#5F5F68] mb-3 tracking-widest">「{quickCat}」的商品・點選即可帶入下方登錄售價</p>
               <div className="flex flex-wrap gap-2">
-                {setMenus.filter(m => categoryOf(m) === quickCat).map(m => {
+                {liveMenus.filter(m => categoryOf(m) === quickCat).map(m => {
                   const rec = mpForm.storeId ? monthlyPrices.find(r => r.month === selectedMonth && r.storeId === mpForm.storeId && r.menuId === m.id) : null;
                   const picked = mpForm.menuId === m.id;
                   return (
@@ -1338,8 +1362,8 @@ export default function App() {
                 className={selectCls}
               >
                 <option value="" disabled>選擇分類...</option>
-                {categoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
                 <option value="__new__">+ 新增分類...</option>
+                {categoryOptions.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
               {isNewCategory && (
                 <input type="text" value={mpForm.newCategory || ''} onChange={(e) => setMpForm({ ...mpForm, newCategory: e.target.value })} placeholder="輸入新分類名稱" autoFocus className={`${selectCls} mt-2`} />
@@ -1353,8 +1377,8 @@ export default function App() {
                 className={selectCls}
               >
                 <option value="" disabled>選擇商品...</option>
-                {menuOptions.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                 <option value="__new__">+ 新增商品...</option>
+                {menuOptions.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
               </select>
               {isNewMenu && (
                 <input type="text" value={mpForm.newMenuName || ''} onChange={(e) => setMpForm({ ...mpForm, newMenuName: e.target.value })} placeholder="輸入新商品名稱" className={`${selectCls} mt-2`} />
@@ -1387,10 +1411,30 @@ export default function App() {
         {monthRecords.length === 0 ? (
           <div className="text-center py-20 text-red-600 font-bold rounded-[32px] bg-[#F5F5F5]">這個月還沒有登錄任何售價。</div>
         ) : (
+          <>
+          <div className="bg-[#DEDEE4] p-5 rounded-[24px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] mb-6">
+            <div className="relative mb-4">
+              <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-400" />
+              <input type="text" value={recSearch} onChange={(e) => setRecSearch(e.target.value)} placeholder="搜尋商品或分類…" aria-label="搜尋售價紀錄" className="w-full bg-white border border-[#B4B4BE] rounded-full pl-11 pr-10 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold" />
+              {recSearch && <button onClick={() => setRecSearch('')} aria-label="清除搜尋" className="absolute right-3 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full text-neutral-400 hover:text-black hover:bg-neutral-100"><X size={14} /></button>}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button onClick={() => setRecCat('')} aria-pressed={!recCat} className={`px-4 py-1.5 rounded-full text-sm font-bold border transition-colors ${!recCat ? 'bg-black text-white border-black' : 'bg-white text-black border-[#B4B4BE] hover:border-black'}`}>全部 {monthRecords.length}</button>
+              {recCatList.map(c => (
+                <button key={c} onClick={() => setRecCat(recCat === c ? '' : c)} aria-pressed={recCat === c} className={`px-4 py-1.5 rounded-full text-sm font-bold border transition-colors ${recCat === c ? 'bg-black text-white border-black' : 'bg-white text-black border-[#B4B4BE] hover:border-black'}`}>{c} {monthRecords.filter(r => recCategory(r) === c).length}</button>
+              ))}
+              <span className="flex-1" />
+              <button onClick={() => { const keys = {}; stores.forEach(st => recCatList.forEach(c => { keys[st.id + '|' + c] = true; })); setCollapsedCats(Object.keys(collapsedCats).some(k => collapsedCats[k]) ? {} : keys); }} className="text-xs font-bold text-[#5F5F68] hover:text-black underline underline-offset-4">{Object.keys(collapsedCats).some(k => collapsedCats[k]) ? '全部展開' : '全部收合'}</button>
+            </div>
+          </div>
+          {filteredRecords.length === 0 ? (
+            <div className="text-center py-16 text-red-600 font-bold rounded-[32px] bg-[#F5F5F5]">找不到符合的商品。</div>
+          ) : (
           <div className="space-y-6">
             {stores.map(st => {
-              const rows = monthRecords.filter(r => r.storeId === st.id).sort((a, b) => (a.category || '').localeCompare(b.category || '', 'zh-Hant') || (a.menuName || '').localeCompare(b.menuName || '', 'zh-Hant'));
+              const rows = filteredRecords.filter(r => r.storeId === st.id).sort((a, b) => recCategory(a).localeCompare(recCategory(b), 'zh-Hant') || recName(a).localeCompare(recName(b), 'zh-Hant'));
               if (rows.length === 0) return null;
+              const groups = []; rows.forEach(r => { const c = recCategory(r); const g = groups.find(x => x[0] === c); if (g) g[1].push(r); else groups.push([c, [r]]); });
               return (
                 <div key={st.id} className="bg-white rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] overflow-hidden">
                   <div className="px-6 py-4 border-b border-neutral-100 flex items-center justify-between">
@@ -1408,26 +1452,47 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {rows.map(r => {
-                          const live = setMenus.find(m => m.id === r.menuId);
-                          const productName = live ? live.name : r.menuName;
+                        {groups.map(([cat, list]) => {
+                          const key = st.id + '|' + cat;
+                          const open = recQuery ? true : !collapsedCats[key];
                           return (
-                            <tr key={r.id} className="border-b border-neutral-50 hover:bg-[#F9F9F9] transition-colors">
-                              <td className="px-6 py-3"><span className="text-xs font-bold text-[#5F5F68] bg-[#F5F5F5] px-3 py-1 rounded-full">{live ? categoryOf(live) : r.category}</span></td>
-                              <td className="px-6 py-3 font-black text-black text-base tracking-tight">{productName}</td>
-                              <td className="px-6 py-3 text-right">
-                                <span className="text-[#6B6B76] text-sm mr-0.5">$</span>
-                                <input
-                                  type="number" min="0" value={r.price} aria-label={`${productName} 售價`}
-                                  onChange={(e) => handleChangeRecordPrice(r.id, e.target.value)}
-                                  onBlur={() => handleBlurRecordPrice(r.id)}
-                                  className="font-black text-black text-base bg-transparent outline-none w-20 text-right focus:bg-[#F5F5F5] rounded-lg px-1 py-0.5 transition-colors"
-                                />
-                              </td>
-                              <td className="px-3 py-3 text-right">
-                                <button onClick={() => handleDeleteRecord(r, productName)} title="刪除" className="p-2 text-neutral-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={15} /></button>
-                              </td>
-                            </tr>
+                            <React.Fragment key={key}>
+                              <tr onClick={() => toggleCollapse(key)} className="bg-[#EFEFF3] cursor-pointer hover:bg-[#E6E6EC] border-b border-[#D4D4DC] select-none">
+                                <td colSpan={4} className="px-6 py-3">
+                                  <span className="flex items-center gap-2 font-black text-black text-sm">
+                                    <ChevronDown size={16} className={`transition-transform ${open ? '' : '-rotate-90'}`} />
+                                    {cat}
+                                    <span className="text-xs font-bold text-[#5F5F68]">{list.length} 項</span>
+                                  </span>
+                                </td>
+                              </tr>
+                              {open && (
+                                <>
+                                {list.map(r => {
+                                  const live = setMenus.find(m => m.id === r.menuId);
+                                  const productName = live ? live.name : r.menuName;
+                                  return (
+                                    <tr key={r.id} className="border-b border-neutral-50 hover:bg-[#F9F9F9] transition-colors">
+                                      <td className="px-6 py-3"><span className="text-xs font-bold text-[#5F5F68] bg-[#F5F5F5] px-3 py-1 rounded-full">{live ? categoryOf(live) : r.category}</span></td>
+                                      <td className="px-6 py-3 font-black text-black text-base tracking-tight">{productName}</td>
+                                      <td className="px-6 py-3 text-right">
+                                        <span className="text-[#6B6B76] text-sm mr-0.5">$</span>
+                                        <input
+                                          type="number" min="0" value={r.price} aria-label={`${productName} 售價`}
+                                          onChange={(e) => handleChangeRecordPrice(r.id, e.target.value)}
+                                          onBlur={() => handleBlurRecordPrice(r.id)}
+                                          className="font-black text-black text-base bg-transparent outline-none w-20 text-right focus:bg-[#F5F5F5] rounded-lg px-1 py-0.5 transition-colors"
+                                        />
+                                      </td>
+                                      <td className="px-3 py-3 text-right">
+                                        <button onClick={() => handleDeleteRecord(r, productName)} title="刪除" className="p-2 text-neutral-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"><Trash2 size={15} /></button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                                </>
+                              )}
+                            </React.Fragment>
                           );
                         })}
                       </tbody>
@@ -1437,6 +1502,8 @@ export default function App() {
               );
             })}
           </div>
+          )}
+          </>
         )}
       </div>
     );
@@ -1636,8 +1703,13 @@ export default function App() {
     const fmtCost = (v) => (v < 1 ? v.toFixed(4) : v.toFixed(2));
 
     const monthChoices = Array.from(new Set(monthlyPrices.map(r => r.month))).sort().reverse();
-    const pickable = monthlyPrices
-      .filter(r => (!costMonthFilter || r.month === costMonthFilter) && (!costStoreFilter || r.storeId === costStoreFilter))
+    const recCategoryOf = (r) => { const m = setMenus.find(x => x.id === r.menuId); return (m && m.menuCategory) || (!m && r.category) || '未分類'; };
+    const isCalced = (r) => costCalcs.some(c => c.recordId === r.id);
+    const baseFiltered = monthlyPrices.filter(r => (!costMonthFilter || r.month === costMonthFilter) && (!costStoreFilter || r.storeId === costStoreFilter));
+    const catChoices = Array.from(new Set(monthlyPrices.map(recCategoryOf))).sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+    const todoCount = baseFiltered.filter(r => (!costCatFilter || recCategoryOf(r) === costCatFilter) && !isCalced(r)).length;
+    const pickable = baseFiltered
+      .filter(r => (!costCatFilter || recCategoryOf(r) === costCatFilter) && (!costStatusFilter || (costStatusFilter === 'todo' ? !isCalced(r) : isCalced(r))))
       .sort((a, b) => b.month.localeCompare(a.month) || productNameOf(a).localeCompare(productNameOf(b), 'zh-Hant'));
     const picked = monthlyPrices.find(r => r.id === costPickId) || null;
     const savedForPicked = picked ? costCalcs.find(c => c.recordId === picked.id) : null;
@@ -1737,7 +1809,7 @@ export default function App() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-xl mb-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
                 <div>
                   <label className={labelCls}>月份</label>
                   <select value={costMonthFilter} onChange={(e) => setCostMonthFilter(e.target.value)} className={inputCls}>
@@ -1750,6 +1822,21 @@ export default function App() {
                   <select value={costStoreFilter} onChange={(e) => setCostStoreFilter(e.target.value)} className={inputCls}>
                     <option value="">全部門店</option>
                     {stores.map(st => <option key={st.id} value={st.id}>{st.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>商品分類</label>
+                  <select value={costCatFilter} onChange={(e) => setCostCatFilter(e.target.value)} className={inputCls} aria-label="商品分類">
+                    <option value="">全部分類</option>
+                    {catChoices.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={labelCls}>試算狀態</label>
+                  <select value={costStatusFilter} onChange={(e) => setCostStatusFilter(e.target.value)} className={`${inputCls} ${costStatusFilter === 'todo' ? '!text-red-600' : ''}`} aria-label="試算狀態">
+                    <option value="">全部狀態</option>
+                    <option value="todo">尚未試算（{todoCount}）</option>
+                    <option value="done">已試算</option>
                   </select>
                 </div>
               </div>
