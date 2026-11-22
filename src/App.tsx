@@ -153,6 +153,9 @@ export default function App() {
   const [addingItem, setAddingItem] = useState(null);
   const [editingCat, setEditingCat] = useState(null); // { name, value }
   const [noteDraft, setNoteDraft] = useState('');
+  const [detailItemId, setDetailItemId] = useState(null); // 商品計算：點單品名稱開啟的食材成本資料卡
+  const [detailEditing, setDetailEditing] = useState(false);
+  const [detailForm, setDetailForm] = useState(null);
   const [recSearch, setRecSearch] = useState('');
   const [recCat, setRecCat] = useState('');
   const [collapsedCats, setCollapsedCats] = useState({});
@@ -518,6 +521,86 @@ export default function App() {
                {renderInputField("狀態欄提示字", "statusText")}
              </div>
           </section>
+        </div>
+      </div>
+    );
+  };
+
+  const renderCostDetailModal = () => {
+    if (!detailItemId) return null;
+    let item = null, cat = null;
+    for (const c of costCategories) { const f = (c.items || []).find(i => i.id === detailItemId); if (f) { item = f; cat = c; break; } }
+    if (!item) return null;
+    const calc = costCalcs.find(c => c.id === item.costCalcId);
+    const close = () => { setDetailItemId(null); setDetailEditing(false); setDetailForm(null); };
+    const fmtUC = (v) => (v < 1 ? v.toFixed(4) : v.toFixed(2));
+    const f = detailEditing && detailForm ? detailForm : calc;
+    const num = (v) => (v === '' || v === undefined || v === null ? NaN : parseFloat(v));
+    const unitCost = calc ? calcCost(num(f.price), num(f.weight), num(f.yieldRate), num(f.taxRate)) : null;
+    const qty = parseFloat(item.qty) || 0;
+    const startEdit = () => { setDetailForm({ price: calc.price, weight: calc.weight, weightUnit: calc.weightUnit, yieldRate: calc.yieldRate, yieldNote: calc.yieldNote || '', taxRate: calc.taxRate }); setDetailEditing(true); };
+    const save = () => {
+      if (unitCost === null) { showNotice('error', '請完整輸入售價、重量、可用重量與營業稅（重量與可用重量需大於 0）。'); return; }
+      setCostCalcs(prev => prev.map(c => c.id === calc.id ? { ...c, price: num(detailForm.price), weight: num(detailForm.weight), weightUnit: detailForm.weightUnit, yieldRate: num(detailForm.yieldRate), yieldNote: detailForm.yieldNote, taxRate: num(detailForm.taxRate) } : c));
+      setDetailEditing(false); setDetailForm(null);
+      showNotice('success', `已更新「${calc.menuName}」的食材成本。`);
+    };
+    const setF = (k, v) => setDetailForm({ ...detailForm, [k]: v });
+    const ro = !detailEditing;
+    const fld = 'w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold h-[52px] disabled:bg-[#ECECF0] disabled:text-neutral-600 disabled:cursor-not-allowed';
+    const lbl = 'block text-xs font-bold text-[#5F5F68] mb-2 tracking-widest uppercase text-left';
+    const unitList = calc ? (units.includes(f.weightUnit) ? units : [f.weightUnit, ...units]) : [];
+    return (
+      <div className="fixed inset-0 z-[180] flex items-center justify-center p-4 bg-black/50" onClick={close} onKeyDown={(e) => { if (e.key === 'Escape') close(); }}>
+        <div role="dialog" aria-modal="true" aria-label="食材成本資料" className="w-full max-w-lg max-h-[92vh] overflow-y-auto bg-white rounded-[28px] p-6 md:p-8 border border-[#B4B4BE] shadow-[0_20px_60px_rgba(0,0,0,0.35)] text-left" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-start justify-between gap-3 mb-1">
+            <div className="min-w-0">
+              <h3 className="text-2xl font-black text-black tracking-tight truncate">{calc ? calc.menuName : item.itemName}</h3>
+              <p className="text-xs font-bold text-[#5F5F68] mt-1">{calc ? `${calc.storeName} · ${calc.month.slice(0, 4)} 年 ${parseInt(calc.month.slice(5), 10)} 月` : item.storeName}・分類「{cat.name}」</p>
+            </div>
+            <button onClick={close} aria-label="關閉" className="w-9 h-9 shrink-0 flex items-center justify-center rounded-full bg-[#F5F5F5] hover:bg-neutral-200 transition-colors"><X size={16} /></button>
+          </div>
+          {!calc ? (
+            <div className="mt-5">
+              <p className="text-sm font-bold text-red-600 mb-3">此單品的食材成本來源已被刪除，目前沿用原本儲存的成本：${fmtUC(item.recipeCost || 0)}/{item.recipeUnit}。</p>
+              <p className="text-xs font-bold text-[#5F5F68]">請先到「{texts.tabIngredients}」重新試算，再重新加入此單品。</p>
+            </div>
+          ) : (
+            <>
+              {ro
+                ? <p className="text-xs font-bold text-red-600 mt-4 mb-4">目前為檢視模式，如需修改請按下方「編輯」（鉛筆）。</p>
+                : <p className="text-xs font-bold text-red-600 mt-4 mb-4">修改後會同步更新「{texts.tabIngredients}」，以及所有使用此成本的單品。</p>}
+              <div className="grid grid-cols-2 gap-4">
+                <div><label className={lbl}>售價 ($)</label><input type="number" min="0" step="any" disabled={ro} value={f.price} onChange={(e) => setF('price', e.target.value)} className={fld} aria-label="售價" /></div>
+                <div><label className={lbl}>單位</label>
+                  <select disabled={ro} value={f.weightUnit} onChange={(e) => setF('weightUnit', e.target.value)} className={fld} aria-label="單位">{unitList.map(u => <option key={u} value={u}>{u}</option>)}</select></div>
+                <div><label className={lbl}>重量</label><input type="number" min="0" step="any" disabled={ro} value={f.weight} onChange={(e) => setF('weight', e.target.value)} className={fld} aria-label="重量" /></div>
+                <div><label className={lbl}>可用重量 (%)</label><input type="number" min="0" step="any" disabled={ro} value={f.yieldRate} onChange={(e) => setF('yieldRate', e.target.value)} className={fld} aria-label="可用重量" /></div>
+                <div><label className={lbl}>營業稅 (%)</label><input type="number" min="0" step="any" disabled={ro} value={f.taxRate} onChange={(e) => setF('taxRate', e.target.value)} className={fld} aria-label="營業稅" /></div>
+                <div><label className={lbl}>可用重量說明</label><input type="text" disabled={ro} value={f.yieldNote || ''} onChange={(e) => setF('yieldNote', e.target.value)} placeholder={ro ? '' : '例如：去骨後剩 85%'} className={fld} aria-label="可用重量說明" /></div>
+              </div>
+              <div className="mt-5 bg-[#111111] rounded-[20px] p-5">
+                <p className="text-[11px] text-neutral-400 font-bold tracking-wide break-words">{unitCost === null ? '請完整輸入售價、重量、可用重量與營業稅。' : `$${num(f.price)} ÷（${num(f.weight)}${f.weightUnit} × ${num(f.yieldRate)}%）× (1 + ${num(f.taxRate)}%)`}</p>
+                <div className="flex items-end justify-between gap-3 mt-2">
+                  <div><span className="block text-[10px] text-neutral-400 font-bold tracking-widest">食材成本</span><span className="text-3xl font-black text-white">{unitCost === null ? '—' : `$${fmtUC(unitCost)}`}</span><span className="text-xs text-neutral-400 font-bold ml-1">/{f.weightUnit}</span></div>
+                  {unitCost !== null && <div className="text-right"><span className="block text-[10px] text-neutral-400 font-bold tracking-widest">此單品 {qty}{f.weightUnit}</span><span className="text-lg font-black text-white">${(unitCost * qty).toFixed(2)}</span></div>}
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 mt-6">
+                {ro ? (
+                  <>
+                    <button onClick={close} className="px-5 py-2.5 rounded-full bg-[#F5F5F5] hover:bg-neutral-200 text-black font-bold text-sm transition-colors">關閉</button>
+                    <button onClick={startEdit} aria-label="編輯食材成本" className="px-5 py-2.5 rounded-full bg-black hover:bg-neutral-800 text-white font-bold text-sm flex items-center gap-2 transition-colors"><Pencil size={14} /> 編輯</button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={() => { setDetailEditing(false); setDetailForm(null); }} className="px-5 py-2.5 rounded-full bg-[#F5F5F5] hover:bg-neutral-200 text-black font-bold text-sm transition-colors">取消編輯</button>
+                    <button onClick={save} disabled={unitCost === null} className="px-5 py-2.5 rounded-full bg-black hover:bg-neutral-800 text-white font-bold text-sm flex items-center gap-2 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"><Save size={14} /> 儲存變更</button>
+                  </>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     );
@@ -893,14 +976,16 @@ export default function App() {
       const addLineCost = addUnitCost !== null && addWeight > 0 ? addUnitCost * addWeight : null;
 
       // 同一分類內不可有相同商品（以商品名稱判斷，與成本來源的門店／月份無關）
-      const itemNameInCat = (it) => { const c = costCalcs.find(x => x.id === it.costCalcId); return c ? c.menuName : it.itemName; };
-      const dupItem = addMenu ? openCat.items.find(it => itemNameInCat(it) === addMenu.name) : null;
+      // 以「商品」本身（每月售價的商品 ID）判斷重複；不同分類下的同名商品視為不同商品，不會衝突
+      const itemMenuId = (it) => { if (it.menuId) return it.menuId; const c = costCalcs.find(x => x.id === it.costCalcId); const rec = c ? monthlyPrices.find(r => r.id === c.recordId) : null; return rec ? rec.menuId : null; };
+      const sameProduct = (it) => { const id = itemMenuId(it); if (id) return id === addMenu.id; const c = costCalcs.find(x => x.id === it.costCalcId); return (c ? c.menuName : it.itemName) === addMenu.name && (c ? catOf(c) : '未分類') === catOf(addMenu); };
+      const dupItem = addMenu ? openCat.items.find(sameProduct) : null;
       const dupItemMsg = dupItem ? `「${addMenu.name}」已在分類「${openCat.name}」中，不可新增相同的商品。如需調整請直接修改該單品的重量。` : '';
 
       const handleAddItem = () => {
         if (dupItem) { showNotice('error', dupItemMsg); return; }
         if (!calcForAdd || addLineCost === null) return;
-        setCostCategories(prev => prev.map(c => c.id === openCat.id ? { ...c, items: [...c.items, { id: `ci-${newUid()}`, costCalcId: calcForAdd.id, itemName: calcForAdd.menuName, storeName: calcForAdd.storeName, recipeCost: addUnitCost, recipeUnit: calcForAdd.weightUnit, qty: addWeight, note: (addingItem.note || '').trim() }] } : c));
+        setCostCategories(prev => prev.map(c => c.id === openCat.id ? { ...c, items: [...c.items, { id: `ci-${newUid()}`, costCalcId: calcForAdd.id, itemName: calcForAdd.menuName, menuId: addMenu ? addMenu.id : '', storeName: calcForAdd.storeName, recipeCost: addUnitCost, recipeUnit: calcForAdd.weightUnit, qty: addWeight, note: (addingItem.note || '').trim() }] } : c));
         setAddingItem(null);
       };
       const handleNote = (itemId, value) => updateCategory(openCat.id, { items: openCat.items.map(i => i.id === itemId ? { ...i, note: value } : i) });
@@ -994,7 +1079,10 @@ export default function App() {
                     </div>
                     <div>
                       <label className={labelCls}>備註（選填）</label>
-                      <input type="text" value={addingItem.note || ''} disabled={!calcForAdd} maxLength={100} onChange={(e) => setAddingItem({ ...addingItem, note: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') handleAddItem(); }} placeholder="例如：去蒂頭、切丁" className={`${fieldCls} disabled:opacity-40 disabled:cursor-not-allowed`} aria-label="備註" />
+                      <div className="relative">
+                        <input type="text" value={addingItem.note || ''} disabled={!calcForAdd} maxLength={100} onChange={(e) => setAddingItem({ ...addingItem, note: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') handleAddItem(); }} placeholder="例如：去蒂頭、切丁" className={`${fieldCls} pr-12 disabled:opacity-40 disabled:cursor-not-allowed`} aria-label="備註" />
+                        {addingItem.note && <button onClick={() => setAddingItem({ ...addingItem, note: '' })} aria-label="清除備註" title="清除備註" className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><X size={16} /></button>}
+                      </div>
                     </div>
                   </div>
                   {dupItem && (
@@ -1036,9 +1124,12 @@ export default function App() {
                   <div className="flex-1 min-w-0 flex items-center gap-4">
                     <div className="w-10 h-10 rounded-full bg-[#F5F5F5] flex items-center justify-center shrink-0"><Tag size={14} className="text-black" /></div>
                     <div className="min-w-0 flex-1 text-left">
-                      <h4 className="font-black text-black text-xl leading-none mb-1.5 truncate">{info.name}</h4>
+                      <h4 className="mb-1.5"><button onClick={() => { setDetailItemId(it.id); setDetailEditing(false); }} title="點擊查看／編輯食材成本" aria-label={`查看 ${info.name} 的食材成本`} className="block max-w-full font-black text-black text-xl leading-none truncate text-left underline decoration-dotted decoration-neutral-400 underline-offset-4 hover:decoration-black hover:decoration-solid transition-all">{info.name}</button></h4>
                       <p className="text-[10px] text-[#5F5F68] font-bold tracking-wide">{info.store} • ${fmtUnitCost(info.unitCost)}/{info.unit}{info.missing ? '（來源已刪除，沿用原成本）' : ''}</p>
-                      <input type="text" value={it.note || ''} onChange={(e) => handleNote(it.id, e.target.value)} maxLength={100} placeholder="備註…" aria-label={`${info.name} 備註`} className="mt-2 w-full max-w-md bg-[#F5F5F5] border border-transparent focus:bg-white focus:border-[#B4B4BE] rounded-full px-4 py-1.5 text-sm font-bold text-black outline-none focus:ring-2 focus:ring-black placeholder:text-neutral-400" />
+                      <div className="relative mt-2 w-full max-w-md">
+                        <input type="text" value={it.note || ''} onChange={(e) => handleNote(it.id, e.target.value)} maxLength={100} placeholder="備註…" aria-label={`${info.name} 備註`} className="w-full bg-[#F5F5F5] border border-transparent focus:bg-white focus:border-[#B4B4BE] rounded-full pl-4 pr-10 py-1.5 text-sm font-bold text-black outline-none focus:ring-2 focus:ring-black placeholder:text-neutral-400" />
+                        {it.note && <button onClick={() => handleNote(it.id, '')} aria-label={`刪除 ${info.name} 的備註`} title="刪除備註" className="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><X size={14} /></button>}
+                      </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-3 sm:justify-end flex-wrap">
@@ -2198,6 +2289,7 @@ export default function App() {
       {renderUIEditor()}
       <style>{'@keyframes blinkRed{0%,100%{opacity:1}50%{opacity:.2}} .blink-red{animation:blinkRed 1s ease-in-out infinite}'}</style>
       {renderToast()}
+      {renderCostDetailModal()}
       {renderConfirmDialog()}
 
     </div>
