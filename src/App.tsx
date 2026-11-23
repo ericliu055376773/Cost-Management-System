@@ -1,6 +1,6 @@
 // @ts-nocheck
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, Lock, ChevronLeft, ChevronDown, Package, Calculator, DollarSign, Beef, Carrot, Fish, Coffee, CheckCircle, AlertCircle, Utensils, Plus, Trash2, Edit2, Pencil, Check, StickyNote, Layers, ChevronRight, Store, Settings, Save, Scale, Receipt, FolderPlus, Tag, Type, Download, Upload, RotateCcw, X, Database, CalendarDays } from 'lucide-react';
+import { Search, Lock, ChevronLeft, ChevronDown, Package, Calculator, DollarSign, Beef, Carrot, Fish, Coffee, CheckCircle, AlertCircle, Utensils, Plus, Trash2, Edit2, Pencil, Check, StickyNote, Layers, ChevronRight, Store, Settings, Save, Scale, Receipt, FolderPlus, Tag, Type, Download, Upload, RotateCcw, X, Database, CalendarDays, TrendingUp } from 'lucide-react';
 
 // ==========================================
 // 本機資料儲存（獨立版，不再連接任何雲端或進貨系統）
@@ -171,6 +171,14 @@ export default function App() {
   const [fabOnlyTodo, setFabOnlyTodo] = useState(false);
   const [fabDrafts, setFabDrafts] = useState({});
   const [fabCollapsed, setFabCollapsed] = useState({});
+  // 價格異動：批次調價 + 異動紀錄
+  const [priceLog, setPriceLog] = useState(() => Array.isArray(initialSaved?.priceLog) ? initialSaved.priceLog : []);
+  const [chgOpen, setChgOpen] = useState(false);
+  const [chgStore, setChgStore] = useState('');
+  const [chgSearch, setChgSearch] = useState('');
+  const [chgDrafts, setChgDrafts] = useState({});
+  const [chgCollapsed, setChgCollapsed] = useState({});
+  const [chgHist, setChgHist] = useState({});
   const [detailItemId, setDetailItemId] = useState(null); // 商品計算：點單品名稱開啟的食材成本資料卡
   const [detailEditing, setDetailEditing] = useState(false);
   const [detailForm, setDetailForm] = useState(null);
@@ -179,6 +187,7 @@ export default function App() {
   const [collapsedCats, setCollapsedCats] = useState({});
   const [quickCat, setQuickCat] = useState(null); // 每月售價：展開的分類（快速選商品）
   const [calcEditing, setCalcEditing] = useState(false); // 已儲存的食材成本需按鉛筆才能修改
+  const [notesOpen, setNotesOpen] = useState(false);
   const [editingNote, setEditingNote] = useState(null); // { id, text }
   const [notes, setNotes] = useState(() => Array.isArray(initialSaved?.notes) ? initialSaved.notes : []);
   const [costCategories, setCostCategories] = useState(() => Array.isArray(initialSaved?.costCategories) ? initialSaved.costCategories : migrateRecipeCategories(initialSaved?.setMenus));
@@ -353,13 +362,13 @@ export default function App() {
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        version: 1, samplesRemoved: true, rawErpData, productRules, globalSettings, setMenus, foodCostPercent, stores, monthlyPrices, costCalcs, units, costCategories, notes
+        version: 1, samplesRemoved: true, rawErpData, productRules, globalSettings, setMenus, foodCostPercent, stores, monthlyPrices, costCalcs, units, costCategories, notes, priceLog
       }));
     } catch (e) {
       console.error('本機儲存失敗:', e);
       showNotice('error', '儲存失敗：瀏覽器儲存空間不足或已停用。');
     }
-  }, [rawErpData, productRules, globalSettings, setMenus, foodCostPercent, stores, monthlyPrices, costCalcs, units, costCategories, notes]);
+  }, [rawErpData, productRules, globalSettings, setMenus, foodCostPercent, stores, monthlyPrices, costCalcs, units, costCategories, notes, priceLog]);
 
   const saveSettings = () => {
     setProductRules(editingRules);
@@ -374,7 +383,7 @@ export default function App() {
   const handleExport = () => {
     const data = {
       app: 'cost-management-system', version: 1, exportedAt: new Date().toISOString(),
-      rawErpData, productRules, globalSettings, setMenus, foodCostPercent, stores, monthlyPrices, costCalcs, units, costCategories, notes
+      rawErpData, productRules, globalSettings, setMenus, foodCostPercent, stores, monthlyPrices, costCalcs, units, costCategories, notes, priceLog
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -413,6 +422,7 @@ export default function App() {
         setUnits(Array.isArray(data.units) && data.units.length > 0 ? data.units : defaultUnits);
         setCostCategories(Array.isArray(data.costCategories) ? data.costCategories : migrateRecipeCategories(data.setMenus));
         setNotes(Array.isArray(data.notes) ? data.notes : []);
+        setPriceLog(Array.isArray(data.priceLog) ? data.priceLog : []);
         setOpenCategoryId(null);
         setCostPickId(null);
         showNotice('success', '備份匯入成功！');
@@ -438,6 +448,8 @@ export default function App() {
     setUnits(defaultUnits);
     setCostCategories([]);
     setNotes([]);
+    setPriceLog([]);
+    setChgDrafts({});
     setNoteDraft('');
     setEditingNote(null);
     setOpenCategoryId(null);
@@ -636,6 +648,148 @@ export default function App() {
         )}
         <button onClick={() => setFabOpen(!fabOpen)} aria-label="價格速查" aria-expanded={fabOpen} className="fixed z-[140] right-3 md:right-6 bottom-24 md:bottom-8 flex items-center gap-2 bg-black hover:bg-neutral-800 text-white pl-4 pr-5 py-3.5 rounded-full font-bold text-sm shadow-[0_12px_32px_rgba(0,0,0,0.4)] hover:-translate-y-0.5 transition-all">
           {fabOpen ? <X size={18} /> : <Receipt size={18} />} {fabOpen ? '收合' : '價格速查'}
+        </button>
+      </>
+    );
+  };
+
+  const renderPriceChange = () => {
+    if (currentTab !== 'monthlyPrice') return null;
+    const storeId = stores.some(st => st.id === chgStore) ? chgStore : (stores[0] ? stores[0].id : '');
+    const storeName = (stores.find(st => st.id === storeId) || {}).name || '';
+    const catOfM = (m) => m.menuCategory || '未分類';
+    const liveMenus = setMenus.filter(m => monthlyPrices.some(r => r.menuId === m.id));
+    const d0 = new Date();
+    const todayMonth = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}`;
+    const fmtDate = (ts) => { const d = new Date(ts); return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`; };
+    const fmtNum = (n) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
+    const latestOf = (m) => monthlyPrices.filter(r => r.menuId === m.id && r.storeId === storeId).sort((a, b) => b.month.localeCompare(a.month))[0];
+    const logOf = (m) => priceLog.filter(l => l.menuId === m.id && l.storeId === storeId).sort((a, b) => b.at - a.at);
+    const q = chgSearch.trim().toLowerCase();
+    const shown = liveMenus.filter(m => !q || m.name.toLowerCase().includes(q) || catOfM(m).toLowerCase().includes(q));
+    const groups = [];
+    shown.slice().sort((a, b) => catOfM(a).localeCompare(catOfM(b), 'zh-Hant') || a.name.localeCompare(b.name, 'zh-Hant')).forEach(m => { const c = catOfM(m); const g = groups.find(x => x[0] === c); if (g) g[1].push(m); else groups.push([c, [m]]); });
+    const filled = liveMenus.filter(m => chgDrafts[m.id] !== undefined && String(chgDrafts[m.id]).trim() !== '');
+    const closeChg = () => { setChgOpen(false); setChgDrafts({}); };
+    const apply = () => {
+      const changes = [];
+      for (const m of filled) {
+        const price = parseFloat(chgDrafts[m.id]);
+        if (isNaN(price) || price < 0) { showNotice('error', `「${m.name}」的價格不正確。`); return; }
+        const cur = latestOf(m);
+        if (cur && cur.price === price) continue;
+        changes.push({ m, price, cur });
+      }
+      if (changes.length === 0) { showNotice('error', '沒有需要異動的價格（未填寫或與目前價格相同）。'); return; }
+      const now = Date.now();
+      let prices = [...monthlyPrices]; let calcs = [...costCalcs]; let cats = costCategories; const logs = []; let synced = 0;
+      for (const { m, price, cur } of changes) {
+        let rec = prices.find(r => r.month === todayMonth && r.storeId === storeId && r.menuId === m.id);
+        if (rec) { const id = rec.id; prices = prices.map(r => r.id === id ? { ...r, price } : r); }
+        else { rec = { id: newUid(), month: todayMonth, storeId, menuId: m.id, menuName: m.name, category: catOfM(m), price }; prices.push(rec); }
+        logs.push({ id: newUid(), menuId: m.id, menuName: m.name, category: catOfM(m), storeId, storeName, month: todayMonth, oldPrice: cur ? cur.price : null, newPrice: price, at: now });
+        // 同步「食材成本」
+        const hit = calcs.find(c => c.recordId === rec.id);
+        if (hit) { calcs = calcs.map(c => c.id === hit.id ? { ...c, price } : c); synced++; }
+        else {
+          const monthOf = (c) => { const r = prices.find(x => x.id === c.recordId); return r ? r.month : (c.month || ''); };
+          const olds = calcs.filter(c => { const r = prices.find(x => x.id === c.recordId); return r ? (r.menuId === m.id && r.storeId === storeId) : (c.menuName === m.name && (c.category || '未分類') === catOfM(m) && c.storeName === storeName); }).sort((a, b) => monthOf(b).localeCompare(monthOf(a)));
+          const old = olds[0];
+          if (old) {
+            const nc = { ...old, id: newUid(), recordId: rec.id, month: todayMonth, price, menuName: m.name, category: catOfM(m), storeName };
+            calcs.push(nc); synced++;
+            cats = cats.map(c => ({ ...c, items: (c.items || []).map(i => i.costCalcId === old.id ? { ...i, costCalcId: nc.id } : i) }));
+          }
+        }
+      }
+      setMonthlyPrices(prices); setCostCalcs(calcs); setCostCategories(cats); setPriceLog(prev => [...logs, ...prev]);
+      setChgDrafts({}); setChgOpen(false);
+      showNotice('success', `已更新 ${changes.length} 項價格異動，並同步 ${synced} 項食材成本。`);
+    };
+    return (
+      <>
+        {chgOpen && (
+          <div className="fixed inset-0 z-[150] flex items-center justify-center p-3 md:p-6 bg-black/50" onClick={closeChg}>
+            <div role="dialog" aria-label="價格異動" onClick={(e) => e.stopPropagation()} className="w-full max-w-3xl max-h-[92vh] flex flex-col bg-white rounded-[28px] border border-[#B4B4BE] shadow-[0_24px_80px_rgba(0,0,0,0.45)] overflow-hidden">
+              <div className="p-5 pb-4 border-b border-[#D4D4DC] bg-orange-50">
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <h3 className="font-black text-xl text-black flex items-center gap-2"><TrendingUp size={20} className="text-orange-600" /> 價格異動</h3>
+                  <button onClick={closeChg} aria-label="關閉價格異動" className="w-9 h-9 flex items-center justify-center rounded-full bg-white hover:bg-neutral-200 transition-colors"><X size={16} /></button>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select value={storeId} onChange={(e) => { setChgStore(e.target.value); setChgDrafts({}); }} aria-label="異動門店" className="bg-white border border-[#B4B4BE] rounded-full px-4 py-2 text-sm font-bold text-black outline-none focus:ring-2 focus:ring-black">
+                    {stores.length === 0 && <option value="">無門店</option>}
+                    {stores.map(st => <option key={st.id} value={st.id}>{st.name}</option>)}
+                  </select>
+                  <div className="relative flex-1 min-w-[160px]">
+                    <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" />
+                    <input value={chgSearch} onChange={(e) => setChgSearch(e.target.value)} placeholder="搜尋商品或分類…" aria-label="異動搜尋" className="w-full bg-white border border-[#B4B4BE] rounded-full pl-9 pr-4 py-2 text-sm font-bold text-black outline-none focus:ring-2 focus:ring-black" />
+                  </div>
+                </div>
+                <p className="mt-3 text-xs font-bold text-red-600">只需填寫有調整的商品，沒填的不會異動。生效日期：{fmtDate(Date.now())}（{parseInt(todayMonth.slice(5), 10)} 月）。</p>
+              </div>
+              <div className="flex-1 overflow-y-auto px-4 md:px-5 py-4">
+                {!storeId ? <p className="text-red-600 font-bold text-sm text-center py-10">請先在頁面上方新增門店。</p>
+                : groups.length === 0 ? <p className="text-red-600 font-bold text-sm text-center py-10">{liveMenus.length === 0 ? '還沒有已登錄的商品。' : '找不到符合的商品。'}</p>
+                : groups.map(([cat, list]) => {
+                  const open = q ? true : !chgCollapsed[cat];
+                  return (
+                    <div key={cat} className="mb-4">
+                      <button onClick={() => setChgCollapsed({ ...chgCollapsed, [cat]: !chgCollapsed[cat] })} className="w-full flex items-center gap-2 px-3 py-2 rounded-[14px] bg-[#EFEFF3] hover:bg-[#E6E6EC] font-black text-sm text-black transition-colors">
+                        <ChevronDown size={15} className={`transition-transform ${open ? '' : '-rotate-90'}`} />{cat}<span className="text-xs font-bold text-[#5F5F68]">{list.length} 項</span>
+                      </button>
+                      {open && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                          {list.map(m => {
+                            const cur = latestOf(m); const hist = logOf(m); const last = hist[0];
+                            const val = chgDrafts[m.id] !== undefined ? chgDrafts[m.id] : '';
+                            const nv = parseFloat(val); const pct = !isNaN(nv) && cur && cur.price > 0 ? ((nv - cur.price) / cur.price) * 100 : null;
+                            const histOpen = !!chgHist[m.id];
+                            return (
+                              <div key={m.id} className={`rounded-[20px] border p-3.5 bg-white ${String(val).trim() !== '' ? 'border-orange-500 shadow-[0_0_0_2px_#F97316]' : 'border-[#B4B4BE]'}`}>
+                                <div className="flex items-start justify-between gap-2">
+                                  <p className="font-black text-black text-base leading-snug break-words min-w-0">{m.name}</p>
+                                  {pct !== null && pct !== 0 && <span className={`shrink-0 text-[11px] font-black px-2 py-0.5 rounded-full ${pct > 0 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-700'}`}>{pct > 0 ? '▲' : '▼'} {Math.abs(pct).toFixed(1)}%</span>}
+                                </div>
+                                <p className="text-xs font-bold text-[#5F5F68] mt-1">目前價格：{cur ? `$${fmtNum(cur.price)}（${parseInt(cur.month.slice(5), 10)} 月）` : '尚未登錄'}</p>
+                                <div className="flex items-center bg-[#F5F5F5] rounded-full pl-4 mt-2.5 focus-within:ring-2 focus-within:ring-orange-500">
+                                  <span className="text-[#5F5F68] font-bold text-sm">$</span>
+                                  <input type="number" min="0" step="any" value={val} placeholder="填入新價格" aria-label={`${m.name} 新價格`}
+                                    onChange={(e) => setChgDrafts({ ...chgDrafts, [m.id]: e.target.value })}
+                                    className="flex-1 min-w-0 bg-transparent px-2 py-2.5 text-right font-black text-base text-black outline-none placeholder:text-neutral-400 placeholder:font-bold" />
+                                  {String(val).trim() !== '' && <button onClick={() => { const n = { ...chgDrafts }; delete n[m.id]; setChgDrafts(n); }} aria-label={`清除 ${m.name} 新價格`} className="w-8 h-8 mr-1 flex items-center justify-center rounded-full hover:bg-neutral-200 text-neutral-500"><X size={14} /></button>}
+                                </div>
+                                {last ? (
+                                  <button onClick={() => setChgHist({ ...chgHist, [m.id]: !histOpen })} aria-expanded={histOpen} className="mt-2 text-[11px] font-bold text-[#5F5F68] hover:text-black underline-offset-2 hover:underline text-left">
+                                    上次異動 {fmtDate(last.at)}：{last.oldPrice === null ? '首次' : `$${fmtNum(last.oldPrice)}`} → ${fmtNum(last.newPrice)}　{histOpen ? '收合紀錄 ▲' : `全部紀錄（${hist.length}）▼`}
+                                  </button>
+                                ) : <p className="mt-2 text-[11px] font-bold text-[#8A8A94]">尚無異動紀錄</p>}
+                                {histOpen && (
+                                  <ul className="mt-1.5 space-y-1 border-t border-neutral-100 pt-1.5">
+                                    {hist.map(l => <li key={l.id} className="text-[11px] font-bold text-black flex justify-between gap-2"><span>{fmtDate(l.at)}</span><span>{l.oldPrice === null ? '首次' : `$${fmtNum(l.oldPrice)}`} → ${fmtNum(l.newPrice)}</span></li>)}
+                                  </ul>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="px-5 py-4 border-t border-[#D4D4DC] flex items-center justify-between gap-3 bg-white">
+                <span className="text-sm font-bold text-black">已填寫 <span className="text-orange-600 font-black">{filled.length}</span> 項</span>
+                <div className="flex items-center gap-2">
+                  <button onClick={closeChg} className="px-5 py-2.5 rounded-full bg-[#F5F5F5] hover:bg-neutral-200 font-bold text-sm text-black">取消</button>
+                  <button onClick={apply} disabled={filled.length === 0} className="px-6 py-2.5 rounded-full bg-orange-500 hover:bg-orange-600 text-white font-black text-sm disabled:opacity-40 disabled:cursor-not-allowed">確認異動</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        <button onClick={() => setChgOpen(true)} aria-label="價格異動" className="fixed z-[140] right-3 md:right-6 bottom-[9.5rem] md:bottom-[5.5rem] flex items-center gap-2 bg-orange-500 hover:bg-orange-600 text-white pl-4 pr-5 py-3.5 rounded-full font-black text-sm shadow-[0_8px_24px_rgba(0,0,0,0.35)] transition-colors">
+          <TrendingUp size={18} /> 價格異動
         </button>
       </>
     );
@@ -1243,7 +1397,7 @@ export default function App() {
                       <p className="text-[10px] text-[#5F5F68] font-bold tracking-wide">{info.store} • ${fmtUnitCost(info.unitCost)}/{info.unit}{info.missing ? '（來源已刪除，沿用原成本）' : ''}</p>
                       <div className="relative mt-2 w-full max-w-md">
                         <AutoText value={it.note || ''} onChange={(e) => handleNote(it.id, e.target.value)} maxLength={300} placeholder="備註…" aria-label={`${info.name} 備註`} className="w-full bg-[#F5F5F5] border border-transparent focus:bg-white focus:border-[#B4B4BE] rounded-[18px] pl-4 pr-10 py-2 text-sm font-bold text-black outline-none focus:ring-2 focus:ring-black placeholder:text-neutral-400 leading-relaxed" />
-                        {it.note && <button onClick={() => handleNote(it.id, '')} aria-label={`刪除 ${info.name} 的備註`} title="刪除備註" className="absolute right-1.5 top-1.5 w-7 h-7 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><X size={14} /></button>}
+                        {it.note && <button onClick={() => askConfirm({ title: '刪除這則備註？', message: `「${info.name}」的備註：\n${it.note.length > 60 ? it.note.slice(0, 60) + '…' : it.note}`, confirmText: '刪除備註', onConfirm: () => handleNote(it.id, '') })} aria-label={`刪除 ${info.name} 的備註`} title="刪除備註" className="absolute right-1.5 top-1.5 w-7 h-7 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><X size={14} /></button>}
                       </div>
                     </div>
                   </div>
@@ -2226,16 +2380,15 @@ export default function App() {
     );
   };
 
-  const renderNotesTab = () => {
+  const renderNotesFab = () => {
     const fmtTime = (t) => { try { const d = new Date(t); const z = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}/${z(d.getMonth() + 1)}/${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`; } catch (e) { return ''; } };
     const handleAddNote = () => {
       const text = noteDraft.trim();
       if (!text) { showNotice('error', '請先輸入事項內容。'); return; }
       const now = Date.now();
-      setNotes(prev => [{ id: `n-${newUid()}`, text, done: false, createdAt: now, updatedAt: now }, ...prev]);
+      setNotes(prev => [{ id: `n-${newUid()}`, text, createdAt: now, updatedAt: now }, ...prev]);
       setNoteDraft('');
     };
-    const handleToggleNote = (id) => setNotes(prev => prev.map(n => n.id === id ? { ...n, done: !n.done } : n));
     const handleSaveNote = () => {
       if (!editingNote) return;
       const text = editingNote.text.trim();
@@ -2244,55 +2397,62 @@ export default function App() {
       setEditingNote(null);
     };
     const handleDeleteNote = (n) => askConfirm({ title: '刪除這則事項？', message: n.text.length > 40 ? n.text.slice(0, 40) + '…' : n.text, onConfirm: () => setNotes(prev => prev.filter(x => x.id !== n.id)) });
-    const doneCount = notes.filter(n => n.done).length;
+    const closeNotes = () => { setNotesOpen(false); setEditingNote(null); };
+    const stackBottom = currentTab === 'monthlyPrice' ? 'bottom-[13rem] md:bottom-36' : 'bottom-24 md:bottom-8';
     return (
-      <div className="max-w-3xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <div className="mb-10 text-center">
-          <h2 className="text-3xl font-black text-black tracking-tight">記事本</h2>
-          <p className="text-[#5F5F68] font-medium text-sm mt-2 tracking-wide">記錄各種事項，自動儲存在本機。</p>
-        </div>
-
-        <div className="bg-[#DEDEE4] p-6 md:p-8 rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] mb-8">
-          <label className="block text-xs font-bold text-[#5F5F68] mb-2 tracking-widest uppercase">新增事項</label>
-          <textarea value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleAddNote(); }} rows={3} placeholder="輸入要記錄的事項…（Ctrl + Enter 快速新增）" aria-label="事項內容" className="w-full text-left bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold resize-y" />
-          <div className="flex justify-end mt-4">
-            <button onClick={handleAddNote} className="bg-black hover:bg-neutral-800 text-white px-6 py-3 rounded-full font-bold text-sm flex items-center gap-2 transition-all"><Plus size={16} /> 新增</button>
-          </div>
-        </div>
-
-        <h3 className="text-xl font-black text-black tracking-tight mb-5">全部事項 <span className="text-[#5F5F68] text-sm font-bold ml-2">共 {notes.length} 則・已完成 {doneCount} 則</span></h3>
-        {notes.length === 0 ? (
-          <div className="text-center py-16 text-red-600 font-bold rounded-[32px] bg-[#F5F5F5]">還沒有任何事項。</div>
-        ) : (
-          <div className="space-y-4">
-            {notes.map(n => (
-              <div key={n.id} className="text-left bg-white rounded-[24px] p-5 border border-[#B4B4BE] shadow-[0_6px_18px_rgba(0,0,0,0.14)]">
-                {editingNote && editingNote.id === n.id ? (
-                  <>
-                    <textarea autoFocus value={editingNote.text} onChange={(e) => setEditingNote({ ...editingNote, text: e.target.value })} onKeyDown={(e) => { if (e.key === 'Escape') setEditingNote(null); }} rows={4} aria-label="編輯事項" className="w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold resize-y" />
-                    <div className="flex justify-end gap-3 mt-3">
-                      <button onClick={() => setEditingNote(null)} className="px-5 py-2.5 rounded-full bg-[#F5F5F5] hover:bg-neutral-200 text-black font-bold text-sm transition-colors">取消</button>
-                      <button onClick={handleSaveNote} className="px-5 py-2.5 rounded-full bg-black hover:bg-neutral-800 text-white font-bold text-sm transition-colors">儲存</button>
-                    </div>
-                  </>
+      <>
+        {notesOpen && (
+          <div className="fixed inset-0 z-[150] flex items-center justify-center p-3 md:p-6 bg-black/50" onClick={closeNotes}>
+            <div role="dialog" aria-label="記事本" onClick={(e) => e.stopPropagation()} className="w-full max-w-2xl max-h-[92vh] flex flex-col bg-white rounded-[28px] border border-[#B4B4BE] shadow-[0_24px_80px_rgba(0,0,0,0.45)] overflow-hidden">
+              <div className="p-5 pb-4 border-b border-[#D4D4DC] bg-[#DEDEE4]">
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <h3 className="font-black text-xl text-black flex items-center gap-2"><StickyNote size={20} /> 記事本 <span className="text-[#5F5F68] text-sm font-bold">共 {notes.length} 則</span></h3>
+                  <button onClick={closeNotes} aria-label="關閉記事本" className="w-9 h-9 flex items-center justify-center rounded-full bg-white hover:bg-neutral-200 transition-colors"><X size={16} /></button>
+                </div>
+                <textarea value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleAddNote(); }} rows={2} placeholder="輸入要記錄的事項…（Ctrl + Enter 快速新增）" aria-label="事項內容" className="w-full text-left bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold resize-y" />
+                <div className="flex justify-end mt-3">
+                  <button onClick={handleAddNote} className="bg-black hover:bg-neutral-800 text-white px-5 py-2.5 rounded-full font-bold text-sm flex items-center gap-2 transition-all"><Plus size={16} /> 新增</button>
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto px-4 md:px-5 py-4">
+                {notes.length === 0 ? (
+                  <div className="text-center py-12 text-red-600 font-bold rounded-[24px] bg-[#F5F5F5]">還沒有任何事項。</div>
                 ) : (
-                  <div className="flex items-start gap-4">
-                    <button onClick={() => handleToggleNote(n.id)} aria-label={n.done ? '標記為未完成' : '標記為已完成'} aria-pressed={!!n.done} className={`mt-0.5 w-7 h-7 shrink-0 rounded-full border-2 flex items-center justify-center transition-colors ${n.done ? 'bg-black border-black text-white' : 'bg-white border-[#B4B4BE] text-transparent hover:border-black'}`}><Check size={14} strokeWidth={3} /></button>
-                    <div className="flex-1 min-w-0">
-                      <p className={`font-bold text-base whitespace-pre-wrap break-words leading-relaxed ${n.done ? 'text-neutral-400 line-through' : 'text-black'}`}>{n.text}</p>
-                      <p className="text-[11px] text-[#5F5F68] font-bold mt-2">{fmtTime(n.createdAt)}{n.updatedAt && n.updatedAt !== n.createdAt ? `（已編輯 ${fmtTime(n.updatedAt)}）` : ''}</p>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button onClick={() => setEditingNote({ id: n.id, text: n.text })} aria-label="編輯事項" className="w-9 h-9 flex items-center justify-center rounded-full text-neutral-400 hover:text-black hover:bg-neutral-100 transition-colors"><Pencil size={16} /></button>
-                      <button onClick={() => handleDeleteNote(n)} aria-label="刪除事項" className="w-9 h-9 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><Trash2 size={16} /></button>
-                    </div>
+                  <div className="space-y-3">
+                    {notes.map(n => (
+                      <div key={n.id} className="text-left bg-white rounded-[20px] p-4 border border-[#B4B4BE] shadow-[0_4px_14px_rgba(0,0,0,0.12)]">
+                        {editingNote && editingNote.id === n.id ? (
+                          <>
+                            <textarea autoFocus value={editingNote.text} onChange={(e) => setEditingNote({ ...editingNote, text: e.target.value })} onKeyDown={(e) => { if (e.key === 'Escape') setEditingNote(null); }} rows={4} aria-label="編輯事項" className="w-full bg-white border border-[#B4B4BE] rounded-[16px] px-4 py-3 text-black outline-none focus:ring-2 focus:ring-black font-bold resize-y" />
+                            <div className="flex justify-end gap-3 mt-3">
+                              <button onClick={() => setEditingNote(null)} className="px-5 py-2.5 rounded-full bg-[#F5F5F5] hover:bg-neutral-200 text-black font-bold text-sm transition-colors">取消</button>
+                              <button onClick={handleSaveNote} className="px-5 py-2.5 rounded-full bg-black hover:bg-neutral-800 text-white font-bold text-sm transition-colors">儲存</button>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex items-start gap-3">
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-base whitespace-pre-wrap break-words leading-relaxed text-black">{n.text}</p>
+                              <p className="text-[11px] text-[#5F5F68] font-bold mt-2">{fmtTime(n.createdAt)}{n.updatedAt && n.updatedAt !== n.createdAt ? `（已編輯 ${fmtTime(n.updatedAt)}）` : ''}</p>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button onClick={() => setEditingNote({ id: n.id, text: n.text })} aria-label="編輯事項" className="w-9 h-9 flex items-center justify-center rounded-full text-neutral-400 hover:text-black hover:bg-neutral-100 transition-colors"><Pencil size={16} /></button>
+                              <button onClick={() => handleDeleteNote(n)} aria-label="刪除事項" className="w-9 h-9 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><Trash2 size={16} /></button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
-            ))}
+            </div>
           </div>
         )}
-      </div>
+        <button onClick={() => setNotesOpen(true)} aria-label="記事本" className={`fixed z-[140] right-3 md:right-6 ${stackBottom} flex items-center gap-2 bg-black hover:bg-neutral-800 text-white pl-4 pr-5 py-3.5 rounded-full font-black text-sm shadow-[0_8px_24px_rgba(0,0,0,0.35)] transition-colors`}>
+          <StickyNote size={18} /> 記事本
+        </button>
+      </>
     );
   };
 
@@ -2301,7 +2461,6 @@ export default function App() {
     { id: 'ingredients', icon: <Layers size={20} strokeWidth={2} />, label: texts.tabIngredients },
     { id: 'setMenus', icon: <Utensils size={20} strokeWidth={2} />, label: texts.tabSetMenus },
     { id: 'sellingPrice', icon: <Tag size={20} strokeWidth={2} />, label: texts.tabSellingPrice || '售價金額' },
-    { id: 'notes', icon: <StickyNote size={20} strokeWidth={2} />, label: '記事本' },
     { id: 'settings', icon: <Settings size={20} strokeWidth={2} />, label: texts.tabSettings },
   ];
 
@@ -2381,7 +2540,6 @@ export default function App() {
           {currentTab === 'ingredients' && renderIngredientsTab()}
           {currentTab === 'setMenus' && renderSetMenuTab()}
           {currentTab === 'sellingPrice' && renderSellingPriceTab()}
-          {currentTab === 'notes' && renderNotesTab()}
           {currentTab === 'settings' && renderSettingsTab()}
         </main>
       </div>
@@ -2405,6 +2563,8 @@ export default function App() {
       <style>{'@keyframes blinkRed{0%,100%{opacity:1}50%{opacity:.2}} .blink-red{animation:blinkRed 1s ease-in-out infinite}'}</style>
       {renderToast()}
       {renderPriceFab()}
+      {renderPriceChange()}
+      {renderNotesFab()}
       {renderCostDetailModal()}
       {renderConfirmDialog()}
 
