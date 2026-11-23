@@ -131,6 +131,18 @@ const migrateRecipeCategories = (menus) => (Array.isArray(menus) ? menus : []).f
       }))
     })));
 
+// 會自動長高的多行文字框：內容再長也能完整看到，不會被截斷
+const AutoText = ({ value, onChange, className = '', ...rest }) => {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.setProperty('height', 'auto', 'important');
+    el.style.setProperty('height', (el.scrollHeight + 2) + 'px', 'important');
+  }, [value]);
+  return <textarea ref={ref} rows={1} value={value} onChange={onChange} className={`resize-none overflow-hidden ${className}`} {...rest} />;
+};
+
 const defaultUnits = ['g', 'kg', '台斤', '斤', '個', '片', '份', '包', 'ml', 'L'];
 
 // 系統預設為空白，不再內建範例資料
@@ -153,6 +165,12 @@ export default function App() {
   const [addingItem, setAddingItem] = useState(null);
   const [editingCat, setEditingCat] = useState(null); // { name, value }
   const [noteDraft, setNoteDraft] = useState('');
+  const [fabOpen, setFabOpen] = useState(false); // 每月售價：右側懸浮「價格速查」
+  const [fabStore, setFabStore] = useState('');
+  const [fabSearch, setFabSearch] = useState('');
+  const [fabOnlyTodo, setFabOnlyTodo] = useState(false);
+  const [fabDrafts, setFabDrafts] = useState({});
+  const [fabCollapsed, setFabCollapsed] = useState({});
   const [detailItemId, setDetailItemId] = useState(null); // 商品計算：點單品名稱開啟的食材成本資料卡
   const [detailEditing, setDetailEditing] = useState(false);
   const [detailForm, setDetailForm] = useState(null);
@@ -526,6 +544,103 @@ export default function App() {
     );
   };
 
+  const renderPriceFab = () => {
+    if (currentTab !== 'monthlyPrice') return null;
+    const storeId = stores.some(st => st.id === fabStore) ? fabStore : (stores[0] ? stores[0].id : '');
+    const catOfM = (m) => m.menuCategory || '未分類';
+    const liveMenus = setMenus.filter(m => monthlyPrices.some(r => r.menuId === m.id));
+    const [yy, mm] = selectedMonth.split('-');
+    const shiftMonth = (d) => { const dt = new Date(parseInt(yy, 10), parseInt(mm, 10) - 1 + d, 1); setSelectedMonth(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`); setFabDrafts({}); };
+    const recOf = (m) => monthlyPrices.find(r => r.month === selectedMonth && r.storeId === storeId && r.menuId === m.id);
+    const lastOf = (m) => monthlyPrices.filter(r => r.menuId === m.id && r.storeId === storeId && r.month < selectedMonth).sort((a, b) => b.month.localeCompare(a.month))[0];
+    const q = fabSearch.trim().toLowerCase();
+    const shown = liveMenus.filter(m => (!q || m.name.toLowerCase().includes(q) || catOfM(m).toLowerCase().includes(q)) && (!fabOnlyTodo || !recOf(m)));
+    const groups = []; shown.slice().sort((a, b) => catOfM(a).localeCompare(catOfM(b), 'zh-Hant') || a.name.localeCompare(b.name, 'zh-Hant')).forEach(m => { const c = catOfM(m); const g = groups.find(x => x[0] === c); if (g) g[1].push(m); else groups.push([c, [m]]); });
+    const registered = liveMenus.filter(m => recOf(m)).length;
+    const commit = (m, raw) => {
+      setFabDrafts(prev => { const n = { ...prev }; delete n[m.id]; return n; });
+      if (raw === undefined || raw === '') return;
+      const price = parseFloat(raw);
+      if (isNaN(price) || price < 0) { showNotice('error', '請輸入正確的售價。'); return; }
+      const rec = recOf(m);
+      if (rec) { if (rec.price === price) return; setMonthlyPrices(prev => prev.map(r => r.id === rec.id ? { ...r, price } : r)); }
+      else setMonthlyPrices(prev => [...prev, { id: newUid(), month: selectedMonth, storeId, menuId: m.id, menuName: m.name, category: catOfM(m), price }]);
+    };
+    return (
+      <>
+        {fabOpen && (
+          <div role="dialog" aria-label="價格速查" className="fixed z-[130] right-3 md:right-6 top-16 bottom-40 md:bottom-24 w-[min(460px,calc(100vw-1.5rem))] flex flex-col bg-white rounded-[28px] border border-[#B4B4BE] shadow-[0_20px_60px_rgba(0,0,0,0.35)] text-left overflow-hidden">
+            <div className="p-5 pb-3 border-b border-[#D4D4DC] bg-[#DEDEE4]">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <h3 className="font-black text-lg text-black flex items-center gap-2"><Receipt size={18} /> 價格速查</h3>
+                <button onClick={() => setFabOpen(false)} aria-label="關閉價格速查" className="w-8 h-8 flex items-center justify-center rounded-full bg-white hover:bg-neutral-200 transition-colors"><X size={15} /></button>
+              </div>
+              <div className="flex items-center gap-2 mb-3">
+                <button onClick={() => shiftMonth(-1)} aria-label="上一個月" className="w-9 h-9 flex items-center justify-center rounded-full bg-white border border-[#B4B4BE] hover:border-black"><ChevronLeft size={16} /></button>
+                <span className="flex-1 text-center font-black text-black text-sm">{yy} 年 {parseInt(mm, 10)} 月</span>
+                <button onClick={() => shiftMonth(1)} aria-label="下一個月" className="w-9 h-9 flex items-center justify-center rounded-full bg-white border border-[#B4B4BE] hover:border-black"><ChevronRight size={16} /></button>
+                <select value={storeId} onChange={(e) => { setFabStore(e.target.value); setFabDrafts({}); }} aria-label="速查門店" className="bg-white border border-[#B4B4BE] rounded-full px-3 py-2 text-sm font-bold text-black outline-none focus:ring-2 focus:ring-black max-w-[120px]">
+                  {stores.length === 0 && <option value="">無門店</option>}
+                  {stores.map(st => <option key={st.id} value={st.id}>{st.name}</option>)}
+                </select>
+              </div>
+              <div className="relative">
+                <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" />
+                <input value={fabSearch} onChange={(e) => setFabSearch(e.target.value)} placeholder="搜尋商品或分類…" aria-label="速查搜尋" className="w-full bg-white border border-[#B4B4BE] rounded-full pl-9 pr-4 py-2 text-sm font-bold text-black outline-none focus:ring-2 focus:ring-black" />
+              </div>
+              <div className="flex items-center justify-between mt-3">
+                <span className="text-xs font-bold text-[#5F5F68]">本月已登錄 {registered} / {liveMenus.length}</span>
+                <button onClick={() => setFabOnlyTodo(!fabOnlyTodo)} aria-pressed={fabOnlyTodo} className={`px-3 py-1 rounded-full text-xs font-bold border transition-colors ${fabOnlyTodo ? 'bg-red-500 text-white border-red-500' : 'bg-white text-red-600 border-red-300 hover:border-red-500'}`}>只看本月未登錄</button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-4 py-3">
+              {!storeId ? <p className="text-red-600 font-bold text-sm text-center py-10">請先在頁面上方新增門店。</p>
+              : groups.length === 0 ? <p className="text-red-600 font-bold text-sm text-center py-10">{liveMenus.length === 0 ? '還沒有已登錄的商品。' : '找不到符合的商品。'}</p>
+              : groups.map(([cat, list]) => {
+                const open = q ? true : !fabCollapsed[cat];
+                return (
+                  <div key={cat} className="mb-3">
+                    <button onClick={() => setFabCollapsed({ ...fabCollapsed, [cat]: !fabCollapsed[cat] })} className="w-full flex items-center gap-2 px-3 py-2 rounded-[14px] bg-[#EFEFF3] hover:bg-[#E6E6EC] font-black text-sm text-black transition-colors">
+                      <ChevronDown size={15} className={`transition-transform ${open ? '' : '-rotate-90'}`} />{cat}<span className="text-xs font-bold text-[#5F5F68]">{list.length} 項</span>
+                    </button>
+                    {open && list.map(m => {
+                      const rec = recOf(m); const last = lastOf(m);
+                      const draft = fabDrafts[m.id];
+                      const val = draft !== undefined ? draft : (rec ? rec.price : '');
+                      const cur = parseFloat(val); const base = last ? parseFloat(last.price) : NaN;
+                      const pct = !isNaN(cur) && !isNaN(base) && base > 0 ? ((cur - base) / base) * 100 : null;
+                      return (
+                        <div key={m.id} className="flex items-center gap-3 px-3 py-2.5 border-b border-neutral-100">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-black text-black text-base truncate">{m.name}</p>
+                            <p className="text-[11px] font-bold text-[#5F5F68]">{last ? `上次 $${last.price}（${parseInt(last.month.slice(5), 10)} 月）` : '無歷史價格'}</p>
+                          </div>
+                          {pct !== null && pct !== 0 && <span className={`text-[11px] font-black px-2 py-0.5 rounded-full ${pct > 0 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-700'}`}>{pct > 0 ? '▲' : '▼'} {Math.abs(pct).toFixed(1)}%</span>}
+                          <div className="flex items-center bg-[#F5F5F5] rounded-full pl-3 focus-within:ring-2 focus-within:ring-black">
+                            <span className="text-[#5F5F68] font-bold text-sm">$</span>
+                            <input type="number" min="0" step="any" value={val} placeholder="未登錄" aria-label={`${m.name} 本月售價`}
+                              onChange={(e) => setFabDrafts({ ...fabDrafts, [m.id]: e.target.value })}
+                              onBlur={(e) => commit(m, e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                              className={`w-20 bg-transparent px-2 py-2 text-right font-black text-sm outline-none ${rec ? 'text-black' : 'text-red-600 placeholder:text-red-400'}`} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+            <p className="px-5 py-2.5 text-[11px] font-bold text-red-600 border-t border-[#D4D4DC]">輸入售價後按 Enter 或點其他地方即自動儲存。</p>
+          </div>
+        )}
+        <button onClick={() => setFabOpen(!fabOpen)} aria-label="價格速查" aria-expanded={fabOpen} className="fixed z-[140] right-3 md:right-6 bottom-24 md:bottom-8 flex items-center gap-2 bg-black hover:bg-neutral-800 text-white pl-4 pr-5 py-3.5 rounded-full font-bold text-sm shadow-[0_12px_32px_rgba(0,0,0,0.4)] hover:-translate-y-0.5 transition-all">
+          {fabOpen ? <X size={18} /> : <Receipt size={18} />} {fabOpen ? '收合' : '價格速查'}
+        </button>
+      </>
+    );
+  };
+
   const renderCostDetailModal = () => {
     if (!detailItemId) return null;
     let item = null, cat = null;
@@ -577,7 +692,7 @@ export default function App() {
                 <div><label className={lbl}>重量</label><input type="number" min="0" step="any" disabled={ro} value={f.weight} onChange={(e) => setF('weight', e.target.value)} className={fld} aria-label="重量" /></div>
                 <div><label className={lbl}>可用重量 (%)</label><input type="number" min="0" step="any" disabled={ro} value={f.yieldRate} onChange={(e) => setF('yieldRate', e.target.value)} className={fld} aria-label="可用重量" /></div>
                 <div><label className={lbl}>營業稅 (%)</label><input type="number" min="0" step="any" disabled={ro} value={f.taxRate} onChange={(e) => setF('taxRate', e.target.value)} className={fld} aria-label="營業稅" /></div>
-                <div><label className={lbl}>可用重量說明</label><input type="text" disabled={ro} value={f.yieldNote || ''} onChange={(e) => setF('yieldNote', e.target.value)} placeholder={ro ? '' : '例如：去骨後剩 85%'} className={fld} aria-label="可用重量說明" /></div>
+                <div className="col-span-2"><label className={lbl}>可用重量說明</label><AutoText disabled={ro} value={f.yieldNote || ''} onChange={(e) => setF('yieldNote', e.target.value)} maxLength={500} placeholder={ro ? '' : '例如：去骨後剩 85%'} className={`${fld} !h-auto min-h-[52px] leading-relaxed`} aria-label="可用重量說明" /></div>
               </div>
               <div className="mt-5 bg-[#111111] rounded-[20px] p-5">
                 <p className="text-[11px] text-neutral-400 font-bold tracking-wide break-words">{unitCost === null ? '請完整輸入售價、重量、可用重量與營業稅。' : `$${num(f.price)} ÷（${num(f.weight)}${f.weightUnit} × ${num(f.yieldRate)}%）× (1 + ${num(f.taxRate)}%)`}</p>
@@ -1080,8 +1195,8 @@ export default function App() {
                     <div>
                       <label className={labelCls}>備註（選填）</label>
                       <div className="relative">
-                        <input type="text" value={addingItem.note || ''} disabled={!calcForAdd} maxLength={100} onChange={(e) => setAddingItem({ ...addingItem, note: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter') handleAddItem(); }} placeholder="例如：去蒂頭、切丁" className={`${fieldCls} pr-12 disabled:opacity-40 disabled:cursor-not-allowed`} aria-label="備註" />
-                        {addingItem.note && <button onClick={() => setAddingItem({ ...addingItem, note: '' })} aria-label="清除備註" title="清除備註" className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><X size={16} /></button>}
+                        <AutoText value={addingItem.note || ''} disabled={!calcForAdd} maxLength={300} onChange={(e) => setAddingItem({ ...addingItem, note: e.target.value })} placeholder="例如：去蒂頭、切丁" className={`${fieldCls} !h-auto min-h-[52px] leading-relaxed pr-12 disabled:opacity-40 disabled:cursor-not-allowed`} aria-label="備註" />
+                        {addingItem.note && <button onClick={() => setAddingItem({ ...addingItem, note: '' })} aria-label="清除備註" title="清除備註" className="absolute right-2 top-2 w-8 h-8 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><X size={16} /></button>}
                       </div>
                     </div>
                   </div>
@@ -1127,8 +1242,8 @@ export default function App() {
                       <h4 className="mb-1.5"><button onClick={() => { setDetailItemId(it.id); setDetailEditing(false); }} title="點擊查看／編輯食材成本" aria-label={`查看 ${info.name} 的食材成本`} className="block max-w-full font-black text-black text-xl leading-none truncate text-left underline decoration-dotted decoration-neutral-400 underline-offset-4 hover:decoration-black hover:decoration-solid transition-all">{info.name}</button></h4>
                       <p className="text-[10px] text-[#5F5F68] font-bold tracking-wide">{info.store} • ${fmtUnitCost(info.unitCost)}/{info.unit}{info.missing ? '（來源已刪除，沿用原成本）' : ''}</p>
                       <div className="relative mt-2 w-full max-w-md">
-                        <input type="text" value={it.note || ''} onChange={(e) => handleNote(it.id, e.target.value)} maxLength={100} placeholder="備註…" aria-label={`${info.name} 備註`} className="w-full bg-[#F5F5F5] border border-transparent focus:bg-white focus:border-[#B4B4BE] rounded-full pl-4 pr-10 py-1.5 text-sm font-bold text-black outline-none focus:ring-2 focus:ring-black placeholder:text-neutral-400" />
-                        {it.note && <button onClick={() => handleNote(it.id, '')} aria-label={`刪除 ${info.name} 的備註`} title="刪除備註" className="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><X size={14} /></button>}
+                        <AutoText value={it.note || ''} onChange={(e) => handleNote(it.id, e.target.value)} maxLength={300} placeholder="備註…" aria-label={`${info.name} 備註`} className="w-full bg-[#F5F5F5] border border-transparent focus:bg-white focus:border-[#B4B4BE] rounded-[18px] pl-4 pr-10 py-2 text-sm font-bold text-black outline-none focus:ring-2 focus:ring-black placeholder:text-neutral-400 leading-relaxed" />
+                        {it.note && <button onClick={() => handleNote(it.id, '')} aria-label={`刪除 ${info.name} 的備註`} title="刪除備註" className="absolute right-1.5 top-1.5 w-7 h-7 flex items-center justify-center rounded-full text-neutral-400 hover:text-red-500 hover:bg-red-50 transition-colors"><X size={14} /></button>}
                       </div>
                     </div>
                   </div>
@@ -2026,7 +2141,7 @@ export default function App() {
                 <label className={labelCls}>可用重量 (%)</label>
                 <input type="number" min="0" max="100" step="any" value={costForm.yieldRate} disabled={locked} onChange={(e) => setField('yieldRate', e.target.value)} className={inputCls} placeholder="例如 85" />
                 <p className="text-[11px] text-red-600 font-bold mt-2">填可用比例：85 代表 重量 × 85%</p>
-                <input type="text" value={costForm.yieldNote || ''} disabled={locked} onChange={(e) => setField('yieldNote', e.target.value)} className={`${inputCls} mt-3 text-sm`} placeholder="算法說明，例如：去骨後剩 85%" aria-label="耗損算法說明" />
+                <AutoText value={costForm.yieldNote || ''} disabled={locked} maxLength={500} onChange={(e) => setField('yieldNote', e.target.value)} className={`${inputCls} !h-auto min-h-[52px] leading-relaxed mt-3 text-sm`} placeholder="算法說明，例如：去骨後剩 85%" aria-label="耗損算法說明" />
               </div>
               <div>
                 <label className={labelCls}>營業稅 (%)</label>
@@ -2089,7 +2204,7 @@ export default function App() {
                         </td>
                         <td className="px-4 py-4 text-right font-bold text-black text-sm">${c.price}</td>
                         <td className="px-4 py-4 text-right font-bold text-black text-sm">{c.weight}{c.weightUnit}</td>
-                        <td className="px-4 py-4 text-right font-bold text-black text-sm">{c.yieldRate}%{c.yieldNote && <span className="block text-[10px] text-[#5F5F68] font-medium mt-0.5 max-w-[160px] ml-auto break-words">{c.yieldNote}</span>}</td>
+                        <td className="px-4 py-4 text-right font-bold text-black text-sm">{c.yieldRate}%{c.yieldNote && <span className="block text-[10px] text-[#5F5F68] font-medium mt-0.5 max-w-[240px] ml-auto break-words whitespace-pre-wrap">{c.yieldNote}</span>}</td>
                         <td className="px-4 py-4 text-right font-bold text-black text-sm">{c.taxRate}%</td>
                         <td className="px-6 py-4 text-right">
                           <span className="font-black text-black text-lg">{cost === null ? '—' : `$${fmtCost(cost)}`}</span>
@@ -2289,6 +2404,7 @@ export default function App() {
       {renderUIEditor()}
       <style>{'@keyframes blinkRed{0%,100%{opacity:1}50%{opacity:.2}} .blink-red{animation:blinkRed 1s ease-in-out infinite}'}</style>
       {renderToast()}
+      {renderPriceFab()}
       {renderCostDetailModal()}
       {renderConfirmDialog()}
 
