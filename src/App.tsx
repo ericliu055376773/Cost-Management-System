@@ -179,6 +179,8 @@ export default function App() {
   const [chgDrafts, setChgDrafts] = useState({});
   const [chgCollapsed, setChgCollapsed] = useState({});
   const [chgHist, setChgHist] = useState({});
+  const [chgView, setChgView] = useState('edit'); // 'edit' 填寫新價格 | 'log' 已異動商品
+  const [chgLogOpen, setChgLogOpen] = useState({});
   const [detailItemId, setDetailItemId] = useState(null); // 商品計算：點單品名稱開啟的食材成本資料卡
   const [detailEditing, setDetailEditing] = useState(false);
   const [detailForm, setDetailForm] = useState(null);
@@ -670,7 +672,16 @@ export default function App() {
     const groups = [];
     shown.slice().sort((a, b) => catOfM(a).localeCompare(catOfM(b), 'zh-Hant') || a.name.localeCompare(b.name, 'zh-Hant')).forEach(m => { const c = catOfM(m); const g = groups.find(x => x[0] === c); if (g) g[1].push(m); else groups.push([c, [m]]); });
     const filled = liveMenus.filter(m => chgDrafts[m.id] !== undefined && String(chgDrafts[m.id]).trim() !== '');
-    const closeChg = () => { setChgOpen(false); setChgDrafts({}); };
+    const closeChg = () => { setChgOpen(false); setChgDrafts({}); setChgView('edit'); };
+    const logGroups = (() => {
+      const map = {};
+      priceLog.forEach(l => { const k = `${l.menuId}|${l.storeId}`; (map[k] = map[k] || { key: k, name: l.menuName, category: l.category || '未分類', storeName: l.storeName, list: [] }).list.push(l); });
+      return Object.values(map).map(g => ({ ...g, list: g.list.sort((a, b) => b.at - a.at) }))
+        .filter(g => !q || g.name.toLowerCase().includes(q) || g.category.toLowerCase().includes(q) || (g.storeName || '').toLowerCase().includes(q))
+        .sort((a, b) => b.list[0].at - a.list[0].at);
+    })();
+    const expandAll = () => { if (chgView === 'log') { const o = {}; logGroups.forEach(g => { o[g.key] = true; }); setChgLogOpen(o); } else setChgCollapsed({}); };
+    const collapseAll = () => { if (chgView === 'log') setChgLogOpen({}); else { const o = {}; liveMenus.forEach(m => { o[catOfM(m)] = true; }); setChgCollapsed(o); } };
     const apply = () => {
       const changes = [];
       for (const m of filled) {
@@ -714,22 +725,50 @@ export default function App() {
               <div className="p-5 pb-4 border-b border-[#D4D4DC] bg-orange-50">
                 <div className="flex items-center justify-between gap-3 mb-3">
                   <h3 className="font-black text-xl text-black flex items-center gap-2"><TrendingUp size={20} className="text-orange-600" /> 價格異動</h3>
-                  <button onClick={closeChg} aria-label="關閉價格異動" className="w-9 h-9 flex items-center justify-center rounded-full bg-white hover:bg-neutral-200 transition-colors"><X size={16} /></button>
+                  <div className="flex items-center gap-1.5">
+                    <button onClick={expandAll} className="px-3 py-1.5 rounded-full bg-white border border-[#B4B4BE] hover:border-black text-xs font-bold text-black whitespace-nowrap">全部展開</button>
+                    <button onClick={collapseAll} className="px-3 py-1.5 rounded-full bg-white border border-[#B4B4BE] hover:border-black text-xs font-bold text-black whitespace-nowrap">全部收合</button>
+                    <button onClick={closeChg} aria-label="關閉價格異動" className="w-9 h-9 flex items-center justify-center rounded-full bg-white hover:bg-neutral-200 transition-colors"><X size={16} /></button>
+                  </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <select value={storeId} onChange={(e) => { setChgStore(e.target.value); setChgDrafts({}); }} aria-label="異動門店" className="bg-white border border-[#B4B4BE] rounded-full px-4 py-2 text-sm font-bold text-black outline-none focus:ring-2 focus:ring-black">
+                  <button onClick={() => setChgView(chgView === 'log' ? 'edit' : 'log')} aria-pressed={chgView === 'log'} className={`px-4 py-2 rounded-full text-sm font-black border transition-colors ${chgView === 'log' ? 'bg-orange-500 border-orange-500 text-white' : 'bg-white border-orange-500 text-orange-600 hover:bg-orange-50'}`}>{chgView === 'log' ? '← 返回填寫' : `異動價格（${logGroups.length}）`}</button>
+                  {chgView !== 'log' && <select value={storeId} onChange={(e) => { setChgStore(e.target.value); setChgDrafts({}); }} aria-label="異動門店" className="bg-white border border-[#B4B4BE] rounded-full px-4 py-2 text-sm font-bold text-black outline-none focus:ring-2 focus:ring-black">
                     {stores.length === 0 && <option value="">無門店</option>}
                     {stores.map(st => <option key={st.id} value={st.id}>{st.name}</option>)}
-                  </select>
+                  </select>}
                   <div className="relative flex-1 min-w-[160px]">
                     <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" />
                     <input value={chgSearch} onChange={(e) => setChgSearch(e.target.value)} placeholder="搜尋商品或分類…" aria-label="異動搜尋" className="w-full bg-white border border-[#B4B4BE] rounded-full pl-9 pr-4 py-2 text-sm font-bold text-black outline-none focus:ring-2 focus:ring-black" />
                   </div>
                 </div>
-                <p className="mt-3 text-xs font-bold text-red-600">只需填寫有調整的商品，沒填的不會異動。生效日期：{fmtDate(Date.now())}（{parseInt(todayMonth.slice(5), 10)} 月）。</p>
+                <p className="mt-3 text-xs font-bold text-red-600">{chgView === 'log' ? '以下是曾經異動過價格的商品，最近異動的排在最前面。' : '只需填寫有調整的商品，沒填的不會異動。'}{chgView !== 'log' && `生效日期：${fmtDate(Date.now())}（${parseInt(todayMonth.slice(5), 10)} 月）。`}</p>
               </div>
               <div className="flex-1 overflow-y-auto px-4 md:px-5 py-4">
-                {!storeId ? <p className="text-red-600 font-bold text-sm text-center py-10">請先在頁面上方新增門店。</p>
+                {chgView === 'log' ? (
+                  logGroups.length === 0 ? <p className="text-red-600 font-bold text-sm text-center py-10">{priceLog.length === 0 ? '還沒有任何價格異動紀錄。' : '找不到符合的商品。'}</p>
+                  : <div className="space-y-3">{logGroups.map(g => {
+                    const open = q ? true : !!chgLogOpen[g.key]; const last = g.list[0];
+                    const pctOf = (l) => (l.oldPrice > 0 ? ((l.newPrice - l.oldPrice) / l.oldPrice) * 100 : null);
+                    const Badge = ({ l }) => { const pc = pctOf(l); return pc === null || pc === 0 ? null : <span className={`text-[11px] font-black px-2 py-0.5 rounded-full ${pc > 0 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-700'}`}>{pc > 0 ? '▲' : '▼'} {Math.abs(pc).toFixed(1)}%</span>; };
+                    return (
+                      <div key={g.key} className="rounded-[20px] border border-[#B4B4BE] bg-white overflow-hidden">
+                        <button onClick={() => setChgLogOpen({ ...chgLogOpen, [g.key]: !chgLogOpen[g.key] })} aria-expanded={open} className="w-full text-left p-4 flex items-start gap-3 hover:bg-neutral-50">
+                          <ChevronDown size={16} className={`mt-1 shrink-0 transition-transform ${open ? '' : '-rotate-90'}`} />
+                          <div className="flex-1 min-w-0">
+                            <p className="font-black text-black text-base break-words">{g.name}</p>
+                            <p className="text-[11px] font-bold text-[#5F5F68] mt-0.5">{g.category}・{g.storeName}・共 {g.list.length} 次異動</p>
+                            <p className="text-sm font-black text-black mt-1.5">{last.oldPrice === null ? '首次' : `$${fmtNum(last.oldPrice)}`} → <span className="text-orange-600">${fmtNum(last.newPrice)}</span> <span className="text-[11px] font-bold text-[#5F5F68] ml-1">{fmtDate(last.at)}</span></p>
+                          </div>
+                          <Badge l={last} />
+                        </button>
+                        {open && <ul className="border-t border-neutral-100 px-4 py-2 space-y-1.5 bg-[#FAFAFB]">
+                          {g.list.map(l => <li key={l.id} className="flex items-center justify-between gap-2 text-xs font-bold text-black"><span>{fmtDate(l.at)}</span><span className="flex items-center gap-2">{l.oldPrice === null ? '首次' : `$${fmtNum(l.oldPrice)}`} → ${fmtNum(l.newPrice)} <Badge l={l} /></span></li>)}
+                        </ul>}
+                      </div>
+                    );
+                  })}</div>
+                ) : !storeId ? <p className="text-red-600 font-bold text-sm text-center py-10">請先在頁面上方新增門店。</p>
                 : groups.length === 0 ? <p className="text-red-600 font-bold text-sm text-center py-10">{liveMenus.length === 0 ? '還沒有已登錄的商品。' : '找不到符合的商品。'}</p>
                 : groups.map(([cat, list]) => {
                   const open = q ? true : !chgCollapsed[cat];
@@ -779,11 +818,11 @@ export default function App() {
                 })}
               </div>
               <div className="px-5 py-4 border-t border-[#D4D4DC] flex items-center justify-between gap-3 bg-white">
-                <span className="text-sm font-bold text-black">已填寫 <span className="text-orange-600 font-black">{filled.length}</span> 項</span>
-                <div className="flex items-center gap-2">
+                {chgView === 'log' ? <span className="text-sm font-bold text-black">共 <span className="text-orange-600 font-black">{logGroups.length}</span> 項商品有異動</span> : <span className="text-sm font-bold text-black">已填寫 <span className="text-orange-600 font-black">{filled.length}</span> 項</span>}
+                {chgView === 'log' ? <button onClick={closeChg} className="px-6 py-2.5 rounded-full bg-black hover:bg-neutral-800 text-white font-bold text-sm">關閉</button> : <div className="flex items-center gap-2">
                   <button onClick={closeChg} className="px-5 py-2.5 rounded-full bg-[#F5F5F5] hover:bg-neutral-200 font-bold text-sm text-black">取消</button>
                   <button onClick={apply} disabled={filled.length === 0} className="px-6 py-2.5 rounded-full bg-orange-500 hover:bg-orange-600 text-white font-black text-sm disabled:opacity-40 disabled:cursor-not-allowed">確認異動</button>
-                </div>
+                </div>}
               </div>
             </div>
           </div>
