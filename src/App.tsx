@@ -171,6 +171,7 @@ export default function App() {
   const [fabOnlyTodo, setFabOnlyTodo] = useState(false);
   const [fabDrafts, setFabDrafts] = useState({});
   const [fabCollapsed, setFabCollapsed] = useState({});
+  const [fabEditId, setFabEditId] = useState(null); // 價格速查：目前正在編輯的商品
   // 價格異動：批次調價 + 異動紀錄
   const [priceLog, setPriceLog] = useState(() => Array.isArray(initialSaved?.priceLog) ? initialSaved.priceLog : []);
   const [chgOpen, setChgOpen] = useState(false);
@@ -188,6 +189,7 @@ export default function App() {
   const [recCat, setRecCat] = useState('');
   const [collapsedCats, setCollapsedCats] = useState({});
   const [quickCat, setQuickCat] = useState(null); // 每月售價：展開的分類（快速選商品）
+  const [savedOpen, setSavedOpen] = useState({}); // 已儲存的食材成本：各分類展開狀態（預設收合）
   const [calcEditing, setCalcEditing] = useState(false); // 已儲存的食材成本需按鉛筆才能修改
   const [notesOpen, setNotesOpen] = useState(false);
   const [editingNote, setEditingNote] = useState(null); // { id, text }
@@ -564,7 +566,7 @@ export default function App() {
     const catOfM = (m) => m.menuCategory || '未分類';
     const liveMenus = setMenus.filter(m => monthlyPrices.some(r => r.menuId === m.id));
     const [yy, mm] = selectedMonth.split('-');
-    const shiftMonth = (d) => { const dt = new Date(parseInt(yy, 10), parseInt(mm, 10) - 1 + d, 1); setSelectedMonth(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`); setFabDrafts({}); };
+    const shiftMonth = (d) => { const dt = new Date(parseInt(yy, 10), parseInt(mm, 10) - 1 + d, 1); setSelectedMonth(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`); setFabDrafts({}); setFabEditId(null); };
     const recOf = (m) => monthlyPrices.find(r => r.month === selectedMonth && r.storeId === storeId && r.menuId === m.id);
     const lastOf = (m) => monthlyPrices.filter(r => r.menuId === m.id && r.storeId === storeId && r.month < selectedMonth).sort((a, b) => b.month.localeCompare(a.month))[0];
     const q = fabSearch.trim().toLowerCase();
@@ -587,13 +589,17 @@ export default function App() {
             <div className="p-5 pb-3 border-b border-[#D4D4DC] bg-[#DEDEE4]">
               <div className="flex items-center justify-between gap-3 mb-3">
                 <h3 className="font-black text-lg text-black flex items-center gap-2"><Receipt size={18} /> 價格速查</h3>
-                <button onClick={() => setFabOpen(false)} aria-label="關閉價格速查" className="w-8 h-8 flex items-center justify-center rounded-full bg-white hover:bg-neutral-200 transition-colors"><X size={15} /></button>
+                <div className="flex items-center gap-1.5">
+                  <button onClick={() => setFabCollapsed({})} className="px-3 py-1.5 rounded-full bg-white border border-[#B4B4BE] hover:border-black text-xs font-bold text-black whitespace-nowrap">全部展開</button>
+                  <button onClick={() => { const o = {}; liveMenus.forEach(m => { o[catOfM(m)] = true; }); setFabCollapsed(o); }} className="px-3 py-1.5 rounded-full bg-white border border-[#B4B4BE] hover:border-black text-xs font-bold text-black whitespace-nowrap">全部收合</button>
+                  <button onClick={() => { setFabOpen(false); setFabEditId(null); }} aria-label="關閉價格速查" className="w-8 h-8 flex items-center justify-center rounded-full bg-white hover:bg-neutral-200 transition-colors"><X size={15} /></button>
+                </div>
               </div>
               <div className="flex items-center gap-2 mb-3">
                 <button onClick={() => shiftMonth(-1)} aria-label="上一個月" className="w-9 h-9 flex items-center justify-center rounded-full bg-white border border-[#B4B4BE] hover:border-black"><ChevronLeft size={16} /></button>
                 <span className="flex-1 text-center font-black text-black text-sm">{yy} 年 {parseInt(mm, 10)} 月</span>
                 <button onClick={() => shiftMonth(1)} aria-label="下一個月" className="w-9 h-9 flex items-center justify-center rounded-full bg-white border border-[#B4B4BE] hover:border-black"><ChevronRight size={16} /></button>
-                <select value={storeId} onChange={(e) => { setFabStore(e.target.value); setFabDrafts({}); }} aria-label="速查門店" className="bg-white border border-[#B4B4BE] rounded-full px-3 py-2 text-sm font-bold text-black outline-none focus:ring-2 focus:ring-black max-w-[120px]">
+                <select value={storeId} onChange={(e) => { setFabStore(e.target.value); setFabDrafts({}); setFabEditId(null); }} aria-label="速查門店" className="bg-white border border-[#B4B4BE] rounded-full px-3 py-2 text-sm font-bold text-black outline-none focus:ring-2 focus:ring-black max-w-[120px]">
                   {stores.length === 0 && <option value="">無門店</option>}
                   {stores.map(st => <option key={st.id} value={st.id}>{st.name}</option>)}
                 </select>
@@ -630,14 +636,22 @@ export default function App() {
                             <p className="text-[11px] font-bold text-[#5F5F68]">{last ? `上次 $${last.price}（${parseInt(last.month.slice(5), 10)} 月）` : '無歷史價格'}</p>
                           </div>
                           {pct !== null && pct !== 0 && <span className={`text-[11px] font-black px-2 py-0.5 rounded-full ${pct > 0 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-700'}`}>{pct > 0 ? '▲' : '▼'} {Math.abs(pct).toFixed(1)}%</span>}
-                          <div className="flex items-center bg-[#F5F5F5] rounded-full pl-3 focus-within:ring-2 focus-within:ring-black">
+                          {(() => { const editing = fabEditId === m.id; return (
+                          <>
+                          <div className={`flex items-center rounded-full pl-3 ${editing ? 'bg-white ring-2 ring-black' : 'bg-[#F5F5F5]'}`}>
                             <span className="text-[#5F5F68] font-bold text-sm">$</span>
-                            <input type="number" min="0" step="any" value={val} placeholder="未登錄" aria-label={`${m.name} 本月售價`}
+                            <input type="number" min="0" step="any" value={val} placeholder="未登錄" aria-label={`${m.name} 本月售價`} disabled={!editing}
+                              ref={(el) => { if (el && editing && document.activeElement !== el) el.focus(); }}
                               onChange={(e) => setFabDrafts({ ...fabDrafts, [m.id]: e.target.value })}
-                              onBlur={(e) => commit(m, e.target.value)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                              className={`w-20 bg-transparent px-2 py-2 text-right font-black text-sm outline-none ${rec ? 'text-black' : 'text-red-600 placeholder:text-red-400'}`} />
+                              onBlur={(e) => { commit(m, e.target.value); setFabEditId(null); }}
+                              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setFabDrafts(prev => { const n = { ...prev }; delete n[m.id]; return n; }); setFabEditId(null); } }}
+                              className={`w-20 bg-transparent px-2 py-2 text-right font-black text-sm outline-none disabled:cursor-default ${rec ? 'text-black' : 'text-red-600 placeholder:text-red-400'}`} />
                           </div>
+                          {editing
+                            ? <button onMouseDown={(e) => e.preventDefault()} onClick={() => { commit(m, val); setFabEditId(null); }} aria-label={`完成編輯 ${m.name} 售價`} title="完成" className="w-9 h-9 shrink-0 flex items-center justify-center rounded-full bg-black text-white hover:bg-neutral-800"><Check size={16} /></button>
+                            : <button onClick={() => setFabEditId(m.id)} aria-label={`編輯 ${m.name} 售價`} title="編輯" className="w-9 h-9 shrink-0 flex items-center justify-center rounded-full text-neutral-400 hover:text-black hover:bg-neutral-100"><Pencil size={16} /></button>}
+                          </>
+                          ); })()}
                         </div>
                       );
                     })}
@@ -645,7 +659,7 @@ export default function App() {
                 );
               })}
             </div>
-            <p className="px-5 py-2.5 text-[11px] font-bold text-red-600 border-t border-[#D4D4DC]">輸入售價後按 Enter 或點其他地方即自動儲存。</p>
+            <p className="px-5 py-2.5 text-[11px] font-bold text-red-600 border-t border-[#D4D4DC]">平常為鎖定狀態，按右側鉛筆才能修改；輸入後按 Enter、勾勾或點其他地方即儲存，按 Esc 取消。</p>
           </div>
         )}
         <button onClick={() => setFabOpen(!fabOpen)} aria-label="價格速查" aria-expanded={fabOpen} className="fixed z-[140] right-3 md:right-6 bottom-24 md:bottom-8 flex items-center gap-2 bg-black hover:bg-neutral-800 text-white pl-4 pr-5 py-3.5 rounded-full font-bold text-sm shadow-[0_12px_32px_rgba(0,0,0,0.4)] hover:-translate-y-0.5 transition-all">
@@ -664,6 +678,7 @@ export default function App() {
     const d0 = new Date();
     const todayMonth = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}`;
     const fmtDate = (ts) => { const d = new Date(ts); return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`; };
+    const fmtDT = (ts) => { const d = new Date(ts); const z = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}/${z(d.getMonth() + 1)}/${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`; };
     const fmtNum = (n) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
     const latestOf = (m) => monthlyPrices.filter(r => r.menuId === m.id && r.storeId === storeId).sort((a, b) => b.month.localeCompare(a.month))[0];
     const logOf = (m) => priceLog.filter(l => l.menuId === m.id && l.storeId === storeId).sort((a, b) => b.at - a.at);
@@ -758,12 +773,12 @@ export default function App() {
                           <div className="flex-1 min-w-0">
                             <p className="font-black text-black text-base break-words">{g.name}</p>
                             <p className="text-[11px] font-bold text-[#5F5F68] mt-0.5">{g.category}・{g.storeName}・共 {g.list.length} 次異動</p>
-                            <p className="text-sm font-black text-black mt-1.5">{last.oldPrice === null ? '首次' : `$${fmtNum(last.oldPrice)}`} → <span className="text-orange-600">${fmtNum(last.newPrice)}</span> <span className="text-[11px] font-bold text-[#5F5F68] ml-1">{fmtDate(last.at)}</span></p>
+                            <p className="text-sm font-black text-black mt-1.5">{last.oldPrice === null ? '首次' : `$${fmtNum(last.oldPrice)}`} → <span className="text-orange-600">${fmtNum(last.newPrice)}</span> <span className="text-[11px] font-bold text-[#5F5F68] ml-1">{fmtDT(last.at)}</span></p>
                           </div>
                           <Badge l={last} />
                         </button>
                         {open && <ul className="border-t border-neutral-100 px-4 py-2 space-y-1.5 bg-[#FAFAFB]">
-                          {g.list.map(l => <li key={l.id} className="flex items-center justify-between gap-2 text-xs font-bold text-black"><span>{fmtDate(l.at)}</span><span className="flex items-center gap-2">{l.oldPrice === null ? '首次' : `$${fmtNum(l.oldPrice)}`} → ${fmtNum(l.newPrice)} <Badge l={l} /></span></li>)}
+                          {g.list.map(l => <li key={l.id} className="flex items-center justify-between gap-2 text-xs font-bold text-black"><span>{fmtDT(l.at)}</span><span className="flex items-center gap-2">{l.oldPrice === null ? '首次' : `$${fmtNum(l.oldPrice)}`} → ${fmtNum(l.newPrice)} <Badge l={l} /></span></li>)}
                         </ul>}
                       </div>
                     );
@@ -800,12 +815,12 @@ export default function App() {
                                 </div>
                                 {last ? (
                                   <button onClick={() => setChgHist({ ...chgHist, [m.id]: !histOpen })} aria-expanded={histOpen} className="mt-2 text-[11px] font-bold text-[#5F5F68] hover:text-black underline-offset-2 hover:underline text-left">
-                                    上次異動 {fmtDate(last.at)}：{last.oldPrice === null ? '首次' : `$${fmtNum(last.oldPrice)}`} → ${fmtNum(last.newPrice)}　{histOpen ? '收合紀錄 ▲' : `全部紀錄（${hist.length}）▼`}
+                                    上次異動 {fmtDT(last.at)}：{last.oldPrice === null ? '首次' : `$${fmtNum(last.oldPrice)}`} → ${fmtNum(last.newPrice)}　{histOpen ? '收合紀錄 ▲' : `全部紀錄（${hist.length}）▼`}
                                   </button>
                                 ) : <p className="mt-2 text-[11px] font-bold text-[#8A8A94]">尚無異動紀錄</p>}
                                 {histOpen && (
                                   <ul className="mt-1.5 space-y-1 border-t border-neutral-100 pt-1.5">
-                                    {hist.map(l => <li key={l.id} className="text-[11px] font-bold text-black flex justify-between gap-2"><span>{fmtDate(l.at)}</span><span>{l.oldPrice === null ? '首次' : `$${fmtNum(l.oldPrice)}`} → ${fmtNum(l.newPrice)}</span></li>)}
+                                    {hist.map(l => <li key={l.id} className="text-[11px] font-bold text-black flex justify-between gap-2"><span>{fmtDT(l.at)}</span><span>{l.oldPrice === null ? '首次' : `$${fmtNum(l.oldPrice)}`} → ${fmtNum(l.newPrice)}</span></li>)}
                                   </ul>
                                 )}
                               </div>
@@ -1244,6 +1259,7 @@ export default function App() {
     };
     const lineCostOf = (it) => resolveItem(it).unitCost * (parseFloat(it.qty) || 0);
     const categoryCostOf = (cat) => (cat.items || []).reduce((sum, it) => sum + lineCostOf(it), 0);
+    const unitCostText = (v) => (v < 1 ? v.toFixed(4) : v.toFixed(2));
 
     const updateCategory = (catId, patch) => setCostCategories(prev => prev.map(c => (c.id === catId ? { ...c, ...patch } : c)));
 
@@ -1324,10 +1340,29 @@ export default function App() {
                 className="bg-transparent text-black border-b border-neutral-200 hover:border-neutral-400 focus:border-black px-0 py-2 font-black text-3xl w-full outline-none transition-colors tracking-tight"
                 placeholder="輸入分類名稱..."
               />
+              {/* 選用：設定總量（例如湯 40000cc），算出每單位成本 */}
+              {openCat.yieldOn ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-bold text-[#5F5F68]">總量</span>
+                  <input type="number" min="0" step="any" value={openCat.yieldQty ?? ''} onChange={(e) => updateCategory(openCat.id, { yieldQty: e.target.value })} placeholder="例如 40000" aria-label="分類總量" className="w-32 bg-white border border-[#B4B4BE] rounded-full px-4 py-2 text-sm font-black text-black outline-none focus:ring-2 focus:ring-black" />
+                  <input list="yield-units" value={openCat.yieldUnit ?? 'cc'} onChange={(e) => updateCategory(openCat.id, { yieldUnit: e.target.value })} aria-label="總量單位" className="w-20 bg-white border border-[#B4B4BE] rounded-full px-4 py-2 text-sm font-black text-black outline-none focus:ring-2 focus:ring-black" />
+                  <datalist id="yield-units"><option value="cc" /><option value="ml" /><option value="L" /><option value="g" /><option value="kg" /><option value="份" /></datalist>
+                  <button onClick={() => updateCategory(openCat.id, { yieldOn: false })} aria-label="取消設定總量" title="取消設定總量" className="w-8 h-8 flex items-center justify-center rounded-full text-neutral-500 hover:text-black hover:bg-white"><X size={14} /></button>
+                </div>
+              ) : (
+                <button onClick={() => updateCategory(openCat.id, { yieldOn: true, yieldUnit: openCat.yieldUnit || 'cc' })} className="mt-3 text-xs font-bold text-[#5F5F68] hover:text-black underline-offset-2 hover:underline">＋ 設定總量（算每單位成本）</button>
+              )}
             </div>
             <div className="bg-black rounded-[24px] px-8 py-5 shrink-0">
               <span className="block text-[10px] text-neutral-500 font-bold uppercase tracking-widest mb-1">商品成本</span>
               <span className="text-4xl font-black text-white">{fmtMoney(categoryCostOf(openCat))}</span>
+              {openCat.yieldOn && parseFloat(openCat.yieldQty) > 0 && (
+                <span className="block mt-3 pt-3 border-t border-neutral-700">
+                  <span className="block text-[10px] text-neutral-500 font-bold uppercase tracking-widest mb-1">每 {openCat.yieldUnit || '單位'} 成本</span>
+                  <span className="text-2xl font-black text-orange-400">${unitCostText(categoryCostOf(openCat) / parseFloat(openCat.yieldQty))}</span>
+                  <span className="block text-[10px] text-neutral-500 font-bold mt-1">{fmtMoney(categoryCostOf(openCat))} ÷ {parseFloat(openCat.yieldQty)}{openCat.yieldUnit || ''}</span>
+                </span>
+              )}
             </div>
           </div>
 
@@ -2367,16 +2402,16 @@ export default function App() {
         )}
 
         {/* 已儲存的食材成本 */}
-        <h3 className="text-xl font-black text-black tracking-tight mb-5">已儲存的食材成本 <span className="text-[#5F5F68] text-sm font-bold ml-2">共 {costCalcs.length} 筆</span></h3>
-        {costCalcs.length === 0 ? (
-          <div className="text-center py-16 text-red-600 font-bold rounded-[32px] bg-[#F5F5F5]">尚未儲存任何食材成本。</div>
-        ) : (
-          <div className="bg-white rounded-[32px] shadow-[0_12px_32px_rgba(0,0,0,0.22)] border border-[#B4B4BE] overflow-hidden">
+        {(() => {
+          const catOf = (c) => c.category || '未分類';
+          const cats = [...new Set(costCalcs.map(catOf))].sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+          const rowsOf = (cat) => costCalcs.filter(c => catOf(c) === cat).sort((a, b) => b.month.localeCompare(a.month) || a.menuName.localeCompare(b.menuName, 'zh-Hant'));
+          const renderSavedTable = (rows) => (
             <div className="overflow-x-auto">
-              <table className="w-full text-left">
+              <table className="w-full min-w-[760px] text-left">
                 <thead>
                   <tr className="border-b border-neutral-100">
-                    <th className="px-6 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest">食材</th>
+                    <th className="px-6 py-4 min-w-[150px] text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest">食材</th>
                     <th className="px-4 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">售價</th>
                     <th className="px-4 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">重量</th>
                     <th className="px-4 py-4 text-[10px] text-[#5F5F68] font-bold uppercase tracking-widest text-right">可用重量</th>
@@ -2386,12 +2421,12 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {[...costCalcs].sort((a, b) => b.month.localeCompare(a.month) || a.menuName.localeCompare(b.menuName, 'zh-Hant')).map(c => {
+                  {rows.map(c => {
                     const cost = calcCost(c.price, c.weight, c.yieldRate, c.taxRate);
                     const recordAlive = monthlyPrices.some(r => r.id === c.recordId);
                     return (
                       <tr key={c.id} className="border-b border-neutral-50 hover:bg-[#F9F9F9] transition-colors">
-                        <td className="px-6 py-4">
+                        <td className="px-6 py-4 min-w-[150px]">
                           <span className="font-black text-black text-sm">{c.menuName}</span>
                           <span className="block text-[10px] text-[#5F5F68] font-bold mt-0.5">{c.storeName} · {fmtMonth(c.month)}</span>
                         </td>
@@ -2413,8 +2448,40 @@ export default function App() {
                 </tbody>
               </table>
             </div>
-          </div>
-        )}
+          );
+          return (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+                <h3 className="text-xl font-black text-black tracking-tight">已儲存的食材成本 <span className="text-[#5F5F68] text-sm font-bold ml-2">共 {costCalcs.length} 筆・{cats.length} 個分類</span></h3>
+                {cats.length > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    <button onClick={() => { const o = {}; cats.forEach(c => { o[c] = true; }); setSavedOpen(o); }} className="px-3.5 py-2 rounded-full bg-white border border-[#B4B4BE] hover:border-black text-xs font-bold text-black whitespace-nowrap">全部展開</button>
+                    <button onClick={() => setSavedOpen({})} className="px-3.5 py-2 rounded-full bg-white border border-[#B4B4BE] hover:border-black text-xs font-bold text-black whitespace-nowrap">全部收合</button>
+                  </div>
+                )}
+              </div>
+              {costCalcs.length === 0 ? (
+                <div className="text-center py-16 text-red-600 font-bold rounded-[32px] bg-[#F5F5F5]">尚未儲存任何食材成本。</div>
+              ) : (
+                <div className="space-y-4">
+                  {cats.map(cat => {
+                    const rows = rowsOf(cat); const open = !!savedOpen[cat];
+                    return (
+                      <div key={cat} className="bg-white rounded-[28px] shadow-[0_8px_24px_rgba(0,0,0,0.18)] border border-[#B4B4BE] overflow-hidden">
+                        <button onClick={() => setSavedOpen({ ...savedOpen, [cat]: !open })} aria-expanded={open} aria-label={`${open ? '收合' : '展開'}分類 ${cat}`} className="w-full flex items-center gap-3 px-6 py-4 text-left hover:bg-[#F9F9F9] transition-colors">
+                          <ChevronDown size={18} className={`transition-transform ${open ? '' : '-rotate-90'}`} />
+                          <span className="font-black text-black text-base">{cat}</span>
+                          <span className="text-xs font-bold text-[#5F5F68]">{rows.length} 筆</span>
+                        </button>
+                        {open && <div className="border-t border-neutral-100">{renderSavedTable(rows)}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          );
+        })()}
       </div>
     );
   };
@@ -2543,7 +2610,7 @@ export default function App() {
         </div>
       </aside>
 
-      <div className="flex-1 md:ml-[280px] flex flex-col min-h-screen">
+      <div className="flex-1 min-w-0 md:ml-[280px] flex flex-col min-h-screen">
         <header className="bg-[#F5F5F5]/80 backdrop-blur-xl sticky top-0 z-30 px-4 py-4 md:px-10 md:py-8">
           <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
             
@@ -2574,7 +2641,7 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 p-4 md:px-10 md:pb-10 max-w-6xl mx-auto w-full">
+        <main className="flex-1 min-w-0 p-4 md:px-10 md:pb-10 max-w-6xl mx-auto w-full">
           {currentTab === 'monthlyPrice' && renderMonthlyPriceTab()}
           {currentTab === 'ingredients' && renderIngredientsTab()}
           {currentTab === 'setMenus' && renderSetMenuTab()}
